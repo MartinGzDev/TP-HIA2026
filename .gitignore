@@ -1,0 +1,193 @@
+# ============================================
+# Node.js / Backend
+# ============================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+.npm
+.node_repl_history
+*.tgz
+.yarn-integrity
+
+# ============================================
+# Environment variables and secrets
+# ============================================
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+!*.env.example
+proybackendgrupo13/config.js
+
+# ============================================
+# Angular / Frontend
+# ============================================
+.angular/
+dist/
+build/
+*.ngfactory.ts
+*.ngsummary.json
+*.shim.ts
+*.tsbuildinfo
+
+# ============================================
+# Database backups and exports (SENSIBLE)
+# ============================================
+*.dump
+*.sql
+*.bson
+*.metadata.json
+backup/
+backups/
+!backups/README.md
+!backup/README.md
+dump/
+mongodb-backup/
+tienda/
+proybackendgrupo13/scripts/*.zip
+proybackendgrupo13/scripts/*.tar.gz
+proybackendgrupo13/scripts/backup/
+proybackendgrupo13/scripts/mongodb-backup/
+
+# ============================================
+# Logs (pueden contener información sensible)
+# ============================================
+logs/
+!logs/README.md
+*.log
+*.log.*
+
+# ============================================
+# IDE and Editor files
+# ============================================
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+*~
+
+# ============================================
+# OS generated files
+# ============================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ============================================
+# Temporary files and folders
+# ============================================
+tmp/
+temp/
+.tmp/
+.temp/
+*.tmp
+
+# ============================================
+# Cache directories
+# ============================================
+.cache/
+.parcel-cache/
+.eslintcache
+
+# ============================================
+# Coverage and testing
+# ============================================
+coverage/
+*.lcov
+.nyc_output/
+
+# ============================================
+# Other build tools (if used)
+# ============================================
+.next/
+.nuxt/
+.out/
+.storybook-out/
+jspm_packages/
+
+# ============================================
+# MongoDB Replica Set keyFiles (SENSIBLE)
+# ============================================
+.keys/
+keys/
+!keys/README.md
+
+# ============================================
+# SSL/TLS Certificates and Keys (SENSIBLE)
+# ============================================
+ssl/
+*.pem
+*.key
+*.crt
+*.cert
+*.cer
+*.pfx
+*.p12
+!*.pem.example
+!*.key.example
+!*.crt.example
+!*.cert.example
+
+# ============================================
+# Security / Punto 9 - Documentación y Scripts
+# ============================================
+# Permitir documentación de seguridad
+!docs/
+!docs/**
+
+# Permitir scripts de seguridad (NO los certificados generados)
+!scripts/generate-selfsigned-cert.sh
+!scripts/generate-selfsigned-cert.ps1
+!scripts/setup-firewall.sh
+!scripts/setup-firewall.ps1
+
+# ============================================
+# Archivos de configuración sensibles
+# ============================================
+# No subir configuraciones con datos reales
+**/config.js
+**/secrets.json
+**/credentials.json
+**/*secret*
+**/*password*
+**/*token*
+
+# ============================================
+# Archivos de evidencia con información sensible
+# ============================================
+evidencia_*.txt
+evidencia_*.log
+*_token*.txt
+*_password*.txt
+*_secret*.txt
+
+# ============================================
+# Docker volumes y datos persistentes
+# ============================================
+docker-data/
+volumes/
+*.volume
+
+# ============================================
+# Archivos de sesión y autenticación
+# ============================================
+*.session
+*.session.*
+sessions/
