@@ -1,90 +1,147 @@
-# Frontend
+# Frontend – TP HIA 2026
 
-Frontend del proyecto desarrollado con Angular 20.
+Frontend del proyecto desarrollado con Angular 20 y TypeScript.
 
-## 📋 Requisitos Previos
+## 📋 Requisitos previos
 
-- Node.js (versión 18 o superior)
-- npm o yarn
-- Angular CLI instalado globalmente (opcional, se puede usar npx)
+- Node.js compatible con Angular 20.
+- npm.
+- Backend ejecutándose en `http://localhost:3000`.
+
+No es necesario instalar Angular CLI globalmente. El proyecto incluye Angular CLI como dependencia local.
 
 ## 🚀 Instalación
 
-1. **Navegar a la carpeta del frontend**:
-```bash
-cd DEFINITIVOTPFinal-PYSW/proyectofrontendgrupo13/frontend
-```
+### 1. Instalar dependencias
 
-2. **Instalar dependencias**:
+Desde la carpeta `frontend`:
+
 ```bash
 npm install
 ```
 
-3. **Instalar Angular CLI globalmente** (opcional, pero recomendado):
-```bash
-npm install -g @angular/cli
+### 2. Configuración del proxy
+
+El proyecto incluye el archivo:
+
+```text
+proxy.conf.json
 ```
 
-## ▶️ Ejecutar el Proyecto
+Su configuración permite redirigir las solicitudes de la API al backend:
 
-**Servidor de desarrollo**:
+```json
+{
+  "/api": {
+    "target": "http://localhost:3000",
+    "secure": false,
+    "changeOrigin": true,
+    "logLevel": "debug"
+  }
+}
+```
+
+Además, `angular.json` tiene configurado este proxy para el servidor de desarrollo.
+
+No es necesario modificar la URL de la API para ejecutar el proyecto localmente.
+
+## ▶️ Ejecutar el proyecto
+
+Iniciar el servidor de desarrollo:
+
 ```bash
-ng serve
-# o si no tienes Angular CLI global:
+npm start
+```
+
+También se puede utilizar:
+
+```bash
 npx ng serve
 ```
 
-Una vez que el servidor esté corriendo, abre tu navegador en `http://localhost:4200/`. La aplicación se recargará automáticamente cuando modifiques archivos.
+Abrir el navegador en:
 
-**Compilar para producción**:
-```bash
-ng build
-```
+http://localhost:4200
 
-Los archivos compilados se guardarán en la carpeta `dist/`.
+La aplicación se recargará automáticamente al realizar cambios en el código.
 
-## Code scaffolding
+**Importante:** el backend debe estar ejecutándose y MongoDB debe estar disponible para que funcionen las funcionalidades que consumen la API.
 
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
+## 🏗️ Compilar para producción
 
-```bash
-ng generate component component-name
-```
-
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
+Ejecutar:
 
 ```bash
-ng generate --help
+npm run build
 ```
 
-## Building
+Los archivos compilados se generan dentro de la carpeta `dist/`.
 
-To build the project run:
+## 🧪 Pruebas
+
+Para ejecutar las pruebas unitarias:
 
 ```bash
-ng build
+npm test
 ```
 
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
-
-## Running unit tests
-
-To execute unit tests with the [Karma](https://karma-runner.github.io) test runner, use the following command:
+También se puede ejecutar:
 
 ```bash
-ng test
+npx ng test
 ```
 
-## Running end-to-end tests
+## 🧰 Comandos útiles
 
-For end-to-end (e2e) testing, run:
+| Comando | Descripción |
+|---|---|
+| `npm install` | Instala dependencias |
+| `npm start` | Inicia Angular |
+| `npm run build` | Compila el proyecto |
+| `npm test` | Ejecuta pruebas |
+| `npx ng generate component nombre` | Genera un componente |
+
+## 📁 Estructura
+
+```text
+frontend/
+├── src/
+│   └── app/
+├── public/
+├── proxy.conf.json
+├── angular.json
+├── package.json
+└── README.md
+```
+
+## 🐛 Problemas frecuentes
+
+**Error al conectar con la API**
+
+Verificar que:
+
+- El backend esté ejecutándose en el puerto 3000.
+- El archivo `proxy.conf.json` exista.
+- `angular.json` tenga configurado el proxy.
+
+**Error al iniciar Angular**
+
+Ejecutar:
 
 ```bash
-ng e2e
+npm install
+npm start
 ```
 
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
+**Puerto 4200 ocupado**
 
-## Additional Resources
+Se puede iniciar Angular en otro puerto:
 
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+```bash
+npx ng serve --port 4201
+```
+
+## 📚 Recursos
+
+- [Documentación oficial de Angular](https://angular.dev/)
+- [Angular CLI](https://angular.dev/tools/cli)
