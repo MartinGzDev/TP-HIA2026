@@ -64,7 +64,9 @@ const Producto = sequelize.define('Producto', {
   timestamps: true,
   hooks: {
     beforeValidate(producto) {
-      producto.disponible = producto.stock > 0;
+      if (producto.isNewRecord || producto.changed('stock')) {
+        producto.disponible = Number(producto.stock) > 0;
+      }
     }
   }
 });

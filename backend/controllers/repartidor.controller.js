@@ -1,454 +1,157 @@
+const sequelize = require('../config/database');
 const Repartidor = require('../models/Repartidor');
 const Usuario = require('../models/usuario');
+const Rol = require('../models/rol');
+const Pedido = require('../models/pedido');
 
-/**
- * @desc Obtener todos los repartidores
- * @route GET /api/repartidores
- * @access Admin
- */
+const usuarioInclude = { model: Usuario, as: 'usuario', attributes: ['id', 'username', 'email', 'nombre', 'apellido', 'telefono', 'rolId'], include: [{ model: Rol, as: 'rol', attributes: ['id', 'nombre'] }] };
+const actorId = req => req.usuario?.id ?? req.usuario?._id;
+const propietario = (repartidor, req) => String(repartidor.usuarioId) === String(actorId(req));
+
 exports.getRepartidores = async (req, res) => {
-    try {
-        // Paginación para evitar cargar demasiados repartidores de una vez
-        const page = parseInt(req.query.page) || 1;
-        const limit = Math.min(parseInt(req.query.limit) || 50, 200);
-        const skip = (page - 1) * limit;
-
-        const query = {};
-
-        // Filtrar por usuarioId si se proporciona como query param
-        if (req.query.usuarioId) {
-            query.usuarioId = req.query.usuarioId;
-        }
-
-        // Contar total
-        let totalRepartidores;
-        try {
-            totalRepartidores = await Repartidor.countDocuments(query);
-        } catch (countError) {
-            console.error('Error al contar repartidores:', countError);
-            totalRepartidores = 0;
-        }
-
-        // *** CRÍTICO: Población anidada para usuarioId y rolId ***
-        const repartidores = await Repartidor.find(query).populate({
-            path: 'usuarioId',
-            select: 'username email nombre apellido telefono rolId',
-            populate: {
-                path: 'rolId', // Popula el rolId dentro del Usuario
-                select: 'nombre' // Selecciona solo el nombre del Rol
-            }
-        })
-        .limit(limit)
-        .skip(skip)
-        .lean();
-
-        res.status(200).json({
-            repartidores: repartidores,
-            paginacion: {
-                total: totalRepartidores,
-                pagina: page,
-                limite: limit,
-                totalPaginas: Math.ceil(totalRepartidores / limit),
-                tieneSiguiente: page < Math.ceil(totalRepartidores / limit),
-                tieneAnterior: page > 1
-            }
-        });
-    } catch (error) {
-        console.error('Error al obtener repartidores:', error);
-        if (!res.headersSent) {
-            res.status(500).json({ mensaje: 'Error interno del servidor al obtener repartidores.', error: error.message });
-        }
-    }
+  try {
+    const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 50, 1), 200);
+    const where = {};
+    if (req.query.usuarioId) where.usuarioId = req.query.usuarioId;
+    const { count, rows } = await Repartidor.findAndCountAll({ where, include: [usuarioInclude], order: [['id', 'ASC']], limit, offset: (page - 1) * limit, distinct: true });
+    const totalPaginas = Math.ceil(count / limit);
+    return res.status(200).json({ repartidores: rows, paginacion: { total: count, pagina: page, limite: limit, totalPaginas, tieneSiguiente: page < totalPaginas, tieneAnterior: page > 1 } });
+  } catch (error) { console.error('Error al obtener repartidores:', error); return res.status(500).json({ mensaje: 'Error interno del servidor al obtener repartidores.', error: error.message }); }
 };
 
-/**
- * @desc Crear un nuevo perfil de repartidor para un usuario existente
- * @route POST /api/repartidores
- * @access Admin
- * @body {string} usuarioId - El ID del usuario asociado (debe tener rol 'repartidor')
- * @body {string} [estado='disponible']
- * @body {string} [vehiculo='']
- * @body {string} [numeroLicencia='']
- */
 exports.createRepartidor = async (req, res) => {
-    try {
-        const { usuarioId, estado, vehiculo, numeroLicencia } = req.body;
-
-        if (!usuarioId) {
-            return res.status(400).json({ mensaje: 'El campo usuarioId es obligatorio para crear un perfil de repartidor.' });
-        }
-
-        const usuarioExistente = await Usuario.findById(usuarioId).populate('rolId');
-        if (!usuarioExistente) {
-            return res.status(404).json({ mensaje: 'Usuario no encontrado con el ID proporcionado.' });
-        }
-        if (usuarioExistente.rolId.nombre !== 'repartidor') {
-            return res.status(400).json({ mensaje: 'El usuario asociado debe tener el rol de "repartidor".' });
-        }
-
-        const repartidorExistente = await Repartidor.findOne({ usuarioId });
-        if (repartidorExistente) {
-            return res.status(400).json({ mensaje: 'Ya existe un perfil de repartidor asociado a este usuario.' });
-        }
-
-        const nuevoRepartidor = new Repartidor({
-            usuarioId,
-            estado: estado || 'disponible',
-            vehiculo: vehiculo || '',
-            numeroLicencia: numeroLicencia || '',
-        });
-
-        await nuevoRepartidor.save();
-        // *** CRÍTICO: Población anidada para devolver una respuesta completa ***
-        const repartidorConUsuario = await Repartidor.findById(nuevoRepartidor._id).populate({
-            path: 'usuarioId',
-            select: 'username email nombre apellido telefono rolId',
-            populate: {
-                path: 'rolId',
-                select: 'nombre'
-            }
-        });
-        res.status(201).json({ mensaje: 'Perfil de repartidor creado exitosamente', repartidor: repartidorConUsuario });
-    } catch (error) {
-        console.error('Error al crear perfil de repartidor:', error);
-        res.status(500).json({ mensaje: 'Error interno del servidor al crear el perfil de repartidor.', error: error.message });
-    }
+  const transaction = await sequelize.transaction();
+  try {
+    const { usuarioId, estado, vehiculo, numeroLicencia } = req.body;
+    if (!usuarioId) { await transaction.rollback(); return res.status(400).json({ mensaje: 'El campo usuarioId es obligatorio para crear un perfil de repartidor.' }); }
+    const usuario = await Usuario.findByPk(usuarioId, { include: [{ model: Rol, as: 'rol' }], transaction });
+    if (!usuario) { await transaction.rollback(); return res.status(404).json({ mensaje: 'Usuario no encontrado con el ID proporcionado.' }); }
+    if (usuario.rol?.nombre !== 'repartidor') { await transaction.rollback(); return res.status(400).json({ mensaje: 'El usuario asociado debe tener el rol de "repartidor".' }); }
+    const existente = await Repartidor.findOne({ where: { usuarioId }, transaction });
+    if (existente) { await transaction.rollback(); return res.status(400).json({ mensaje: 'Ya existe un perfil de repartidor asociado a este usuario.' }); }
+    const nuevo = await Repartidor.create({ usuarioId, estado: estado || 'disponible', vehiculo: vehiculo || '', numeroLicencia: numeroLicencia || '' }, { transaction });
+    await transaction.commit();
+    const resultado = await Repartidor.findByPk(nuevo.id, { include: [usuarioInclude] });
+    return res.status(201).json({ mensaje: 'Perfil de repartidor creado exitosamente', repartidor: resultado });
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
+    console.error('Error al crear perfil de repartidor:', error);
+    if (error.name === 'SequelizeValidationError') return res.status(400).json({ mensaje: 'Error de validación.', detalle: error.errors.map(e => e.message) });
+    return res.status(500).json({ mensaje: 'Error interno del servidor al crear el perfil de repartidor.', error: error.message });
+  }
 };
 
-/**
- * @desc Obtener un repartidor por ID
- * @route GET /api/repartidores/:id
- * @access Admin, Repartidor (para su propio perfil)
- */
 exports.getRepartidorById = async (req, res) => {
-    try {
-        // *** CRÍTICO: Población anidada para usuarioId y rolId ***
-        const repartidor = await Repartidor.findById(req.params.id).populate({
-            path: 'usuarioId',
-            select: 'username email nombre apellido telefono rolId',
-            populate: {
-                path: 'rolId',
-                select: 'nombre'
-            }
-        });
-        if (!repartidor) {
-            return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
-        }
-
-        if (req.user && req.user.rol === 'repartidor' && repartidor.usuarioId._id.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ mensaje: 'Acceso denegado. No tienes permiso para ver este perfil de repartidor.' });
-        }
-        res.status(200).json(repartidor);
-    } catch (error) {
-        console.error('Error al obtener repartidor por ID:', error);
-        if (error.name === 'CastError') {
-            return res.status(400).json({ mensaje: 'ID de repartidor inválido.' });
-        }
-        res.status(500).json({ mensaje: 'Error interno del servidor al obtener el repartidor por ID.', error: error.message });
-    }
+  try {
+    const repartidor = await Repartidor.findByPk(req.params.id, { include: [usuarioInclude] });
+    if (!repartidor) return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
+    if (req.usuario?.rol === 'repartidor' && !propietario(repartidor, req)) return res.status(403).json({ mensaje: 'Acceso denegado. No tienes permiso para ver este perfil de repartidor.' });
+    return res.status(200).json(repartidor);
+  } catch (error) { console.error('Error al obtener repartidor por ID:', error); return res.status(400).json({ mensaje: 'ID de repartidor inválido.', error: error.message }); }
 };
 
-/**
- * @desc Actualizar un repartidor por ID
- * @route PUT /api/repartidores/:id
- * @access Admin, Repartidor (para su propio perfil)
- * @body {string} [estado]
- * @body {string} [vehiculo]
- * @body {string} [numeroLicencia]
- * @body {Object} [ubicacionActual]
- * @body {number} [ubicacionActual.lat]
- * @body {number} [ubicacionActual.lon]
- */
 exports.updateRepartidor = async (req, res) => {
-    try {
-        const { estado, vehiculo, numeroLicencia, ubicacionActual } = req.body;
-        // *** CRÍTICO: Población anidada para la autorización y respuesta completa ***
-        const repartidor = await Repartidor.findById(req.params.id).populate({
-            path: 'usuarioId',
-            select: 'username email nombre apellido telefono rolId',
-            populate: {
-                path: 'rolId',
-                select: 'nombre'
-            }
-        });
-
-        if (!repartidor) {
-            return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
-        }
-
-        if (req.user && req.user.rol === 'repartidor' && repartidor.usuarioId._id.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ mensaje: 'Acceso denegado. No tienes permiso para actualizar este perfil de repartidor.' });
-        }
-
-        if (estado) repartidor.estado = estado;
-        if (vehiculo) repartidor.vehiculo = vehiculo;
-        if (numeroLicencia) repartidor.numeroLicencia = numeroLicencia;
-        if (ubicacionActual) {
-            repartidor.ubicacionActual.lat = ubicacionActual.lat !== undefined ? ubicacionActual.lat : repartidor.ubicacionActual.lat;
-            repartidor.ubicacionActual.lon = ubicacionActual.lon !== undefined ? ubicacionActual.lon : repartidor.ubicacionActual.lon;
-        }
-
-        await repartidor.save();
-        // El repartidor ya está poblado con usuario y rol, así que lo devolvemos directamente
-        res.status(200).json({ mensaje: 'Repartidor actualizado exitosamente', repartidor: repartidor });
-    } catch (error) {
-        console.error('Error al actualizar repartidor:', error);
-        if (error.name === 'CastError') {
-            return res.status(400).json({ mensaje: 'ID de repartidor inválido.' });
-        }
-        res.status(500).json({ mensaje: 'Error interno del servidor al actualizar el repartidor.', error: error.message });
-    }
+  try {
+    const repartidor = await Repartidor.findByPk(req.params.id, { include: [usuarioInclude] });
+    if (!repartidor) return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
+    if (req.usuario?.rol === 'repartidor' && !propietario(repartidor, req)) return res.status(403).json({ mensaje: 'Acceso denegado. No tienes permiso para actualizar este perfil de repartidor.' });
+    const updates = {};
+    for (const key of ['estado', 'vehiculo', 'numeroLicencia']) if (req.body[key] !== undefined) updates[key] = req.body[key];
+    if (req.body.ubicacionActual !== undefined) updates.ubicacionActual = { ...(repartidor.ubicacionActual || {}), ...req.body.ubicacionActual };
+    await repartidor.update(updates, { validate: true });
+    const resultado = await Repartidor.findByPk(repartidor.id, { include: [usuarioInclude] });
+    return res.status(200).json({ mensaje: 'Repartidor actualizado exitosamente', repartidor: resultado });
+  } catch (error) { console.error('Error al actualizar repartidor:', error); if (error.name === 'SequelizeValidationError') return res.status(400).json({ mensaje: 'Error de validación.', detalle: error.errors.map(e => e.message) }); return res.status(500).json({ mensaje: 'Error interno del servidor al actualizar el repartidor.', error: error.message }); }
 };
 
-/**
- * @desc Actualizar perfil completo del repartidor (usuario + repartidor)
- * @route PUT /api/repartidores/:id/profile
- * @access Repartidor (para su propio perfil)
- * @body {string} [username] - Username del usuario
- * @body {string} [email] - Email del usuario
- * @body {string} [telefono] - Teléfono del usuario
- * @body {string} [nombre] - Nombre del usuario
- * @body {string} [apellido] - Apellido del usuario
- * @body {string} [vehiculo] - Vehículo del repartidor
- * @body {string} [numeroLicencia] - Número de licencia del repartidor
- * @body {string} [estado] - Estado del repartidor
- */
 exports.updateRepartidorProfile = async (req, res) => {
-    try {
-        const {
-            username, email, telefono, nombre, apellido,
-            vehiculo, numeroLicencia, estado
-        } = req.body;
-
-        // Buscar el repartidor con el usuario poblado
-        const repartidor = await Repartidor.findById(req.params.id).populate({
-            path: 'usuarioId',
-            select: 'username email nombre apellido telefono rolId',
-            populate: {
-                path: 'rolId',
-                select: 'nombre'
-            }
-        });
-
-        if (!repartidor) {
-            return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
-        }
-
-        // Verificar que el usuario autenticado sea el propietario del perfil
-        if (req.user && req.user.rol === 'repartidor' && repartidor.usuarioId._id.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ mensaje: 'Acceso denegado. No tienes permiso para actualizar este perfil.' });
-        }
-
-        // Actualizar datos del usuario si se proporcionan
-        const usuario = repartidor.usuarioId;
-        if (username) usuario.username = username;
-        if (email) usuario.email = email;
-        if (telefono) usuario.telefono = telefono;
-        if (nombre) usuario.nombre = nombre;
-        if (apellido) usuario.apellido = apellido;
-
-        // Guardar cambios del usuario
-        await usuario.save();
-
-        // Actualizar datos del repartidor si se proporcionan
-        if (vehiculo !== undefined) repartidor.vehiculo = vehiculo;
-        if (numeroLicencia !== undefined) repartidor.numeroLicencia = numeroLicencia;
-        if (estado) repartidor.estado = estado;
-
-        // Guardar cambios del repartidor
-        await repartidor.save();
-
-        // Recargar el repartidor con datos actualizados
-        const repartidorActualizado = await Repartidor.findById(req.params.id).populate({
-            path: 'usuarioId',
-            select: 'username email nombre apellido telefono rolId',
-            populate: {
-                path: 'rolId',
-                select: 'nombre'
-            }
-        });
-
-        res.status(200).json({
-            mensaje: 'Perfil actualizado exitosamente',
-            repartidor: repartidorActualizado
-        });
-    } catch (error) {
-        console.error('Error al actualizar perfil del repartidor:', error);
-        if (error.name === 'CastError') {
-            return res.status(400).json({ mensaje: 'ID de repartidor inválido.' });
-        }
-        if (error.code === 11000) {
-            return res.status(400).json({ mensaje: 'El username o email ya está en uso.' });
-        }
-        res.status(500).json({ mensaje: 'Error interno del servidor al actualizar el perfil.', error: error.message });
-    }
+  const transaction = await sequelize.transaction();
+  try {
+    const repartidor = await Repartidor.findByPk(req.params.id, { include: [{ model: Usuario, as: 'usuario' }], transaction });
+    if (!repartidor) { await transaction.rollback(); return res.status(404).json({ mensaje: 'Repartidor no encontrado.' }); }
+    if (req.usuario?.rol === 'repartidor' && !propietario(repartidor, req)) { await transaction.rollback(); return res.status(403).json({ mensaje: 'Acceso denegado. No tienes permiso para actualizar este perfil.' }); }
+    const userUpdates = {};
+    for (const key of ['username', 'email', 'telefono', 'nombre', 'apellido']) if (req.body[key] !== undefined) userUpdates[key] = req.body[key];
+    if (Object.keys(userUpdates).length) await repartidor.usuario.update(userUpdates, { transaction, validate: true });
+    const updates = {};
+    for (const key of ['vehiculo', 'numeroLicencia', 'estado']) if (req.body[key] !== undefined) updates[key] = req.body[key];
+    if (Object.keys(updates).length) await repartidor.update(updates, { transaction, validate: true });
+    await transaction.commit();
+    const resultado = await Repartidor.findByPk(repartidor.id, { include: [usuarioInclude] });
+    return res.status(200).json({ mensaje: 'Perfil actualizado exitosamente', repartidor: resultado });
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
+    console.error('Error al actualizar perfil del repartidor:', error);
+    if (error.name === 'SequelizeUniqueConstraintError') return res.status(409).json({ mensaje: 'El username o email ya está en uso.' });
+    if (error.name === 'SequelizeValidationError') return res.status(400).json({ mensaje: 'Error de validación.', detalle: error.errors.map(e => e.message) });
+    return res.status(500).json({ mensaje: 'Error interno del servidor al actualizar el perfil.', error: error.message });
+  }
 };
 
-/**
- * @desc Eliminar un repartidor por ID
- * @route DELETE /api/repartidores/:id
- * @access Admin
- */
 exports.deleteRepartidor = async (req, res) => {
-    try {
-        const repartidor = await Repartidor.findById(req.params.id);
-
-        if (!repartidor) {
-            return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
-        }
-
-        await Repartidor.deleteOne({ _id: req.params.id });
-        res.status(200).json({ mensaje: 'Repartidor eliminado exitosamente' });
-    } catch (error) {
-        console.error('Error al eliminar repartidor:', error);
-        if (error.name === 'CastError') {
-            return res.status(400).json({ mensaje: 'ID de repartidor inválido.' });
-        }
-        res.status(500).json({ mensaje: 'Error interno del servidor al eliminar el repartidor.', error: error.message });
-    }
+  try {
+    const repartidor = await Repartidor.findByPk(req.params.id);
+    if (!repartidor) return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
+    const pedidosActivos = await Pedido.count({ where: { repartidorId: repartidor.id, estado: ['confirmado', 'en_preparacion', 'en_envio'] } });
+    if (pedidosActivos) return res.status(409).json({ mensaje: 'No se puede eliminar un repartidor con pedidos activos.' });
+    await repartidor.destroy();
+    return res.status(200).json({ mensaje: 'Repartidor eliminado exitosamente' });
+  } catch (error) { console.error('Error al eliminar repartidor:', error); return res.status(500).json({ mensaje: 'Error interno del servidor al eliminar el repartidor.', error: error.message }); }
 };
 
-/**
- * @desc Actualizar la ubicación actual de un repartidor
- * @route PUT /api/repartidores/:id/ubicacion
- * @access Repartidor (para su propio perfil)
- * @body {number} lat
- * @body {number} lon
- */
 exports.updateUbicacion = async (req, res) => {
-    try {
-        const { lat, lon } = req.body;
-        const repartidor = await Repartidor.findById(req.params.id).populate({
-            path: 'usuarioId',
-            select: 'username email nombre apellido telefono rolId',
-            populate: {
-                path: 'rolId',
-                select: 'nombre'
-            }
-        });
-
-        if (!repartidor) {
-            return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
-        }
-
-        if (req.user && req.user.rol === 'repartidor' && repartidor.usuarioId._id.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ mensaje: 'Acceso denegado. No tienes permiso para actualizar la ubicación de otro repartidor.' });
-        }
-
-        if (lat === undefined || lon === undefined) {
-            return res.status(400).json({ mensaje: 'Latitud y longitud son obligatorias para actualizar la ubicación.' });
-        }
-
-        repartidor.ubicacionActual = { lat, lon };
-        await repartidor.save();
-        res.status(200).json({ mensaje: 'Ubicación actualizada exitosamente', ubicacion: repartidor.ubicacionActual });
-    } catch (error) {
-        console.error('Error al actualizar ubicación del repartidor:', error);
-        if (error.name === 'CastError') {
-            return res.status(400).json({ mensaje: 'ID de repartidor inválido.' });
-        }
-        res.status(500).json({ mensaje: 'Error interno del servidor al actualizar la ubicación.', error: error.message });
-    }
+  try {
+    const { lat, lon } = req.body;
+    if (lat === undefined || lon === undefined) return res.status(400).json({ mensaje: 'Latitud y longitud son obligatorias para actualizar la ubicación.' });
+    const repartidor = await Repartidor.findByPk(req.params.id);
+    if (!repartidor) return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
+    if (req.usuario?.rol === 'repartidor' && !propietario(repartidor, req)) return res.status(403).json({ mensaje: 'Acceso denegado. No tienes permiso para actualizar la ubicación de otro repartidor.' });
+    const ubicacion = { ...(repartidor.ubicacionActual || {}), lat: Number(lat), lon: Number(lon) };
+    await repartidor.update({ ubicacionActual: ubicacion });
+    return res.status(200).json({ mensaje: 'Ubicación actualizada exitosamente', ubicacion: repartidor.ubicacionActual });
+  } catch (error) { console.error('Error al actualizar ubicación del repartidor:', error); return res.status(500).json({ mensaje: 'Error interno del servidor al actualizar la ubicación.', error: error.message }); }
 };
 
-/**
- * @desc Cambiar el estado de un repartidor
- * @route PATCH /api/repartidores/:id/estado
- * @access Admin, Gerencia, Repartidor (para su propio perfil)
- * @body {string} estado - El nuevo estado ('disponible', 'en_entrega', 'fuera_de_servicio')
- */
 exports.cambiarEstadoRepartidor = async (req, res) => {
-    try {
-        const { estado } = req.body;
-        const repartidor = await Repartidor.findById(req.params.id).populate({
-            path: 'usuarioId',
-            select: 'username email nombre apellido telefono rolId',
-            populate: {
-                path: 'rolId',
-                select: 'nombre'
-            }
-        });
-
-        if (!repartidor) {
-            return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
-        }
-
-        if (req.user && req.user.rol === 'repartidor' && repartidor.usuarioId._id.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ mensaje: 'Acceso denegado. No tienes permiso para cambiar el estado de otro repartidor.' });
-        }
-
-        await repartidor.cambiarEstado(estado);
-        res.status(200).json({ mensaje: 'Estado del repartidor actualizado exitosamente', repartidor: repartidor });
-    } catch (error) {
-        console.error('Error al cambiar estado del repartidor:', error);
-        if (error.name === 'CastError') {
-            return res.status(400).json({ mensaje: 'ID de repartidor inválido.' });
-        }
-        res.status(500).json({ mensaje: 'Error interno del servidor al cambiar el estado del repartidor.', error: error.message });
-    }
+  try {
+    const { estado } = req.body;
+    const repartidor = await Repartidor.findByPk(req.params.id, { include: [usuarioInclude] });
+    if (!repartidor) return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
+    if (req.usuario?.rol === 'repartidor' && !propietario(repartidor, req)) return res.status(403).json({ mensaje: 'Acceso denegado. No tienes permiso para cambiar el estado de otro repartidor.' });
+    const validos = ['disponible', 'en_entrega', 'fuera_de_servicio'];
+    if (!validos.includes(estado)) return res.status(400).json({ mensaje: 'Estado de repartidor inválido.' });
+    await repartidor.update({ estado, disponible: estado === 'disponible' });
+    return res.status(200).json({ mensaje: 'Estado del repartidor actualizado exitosamente', repartidor });
+  } catch (error) { console.error('Error al cambiar estado del repartidor:', error); return res.status(500).json({ mensaje: 'Error interno del servidor al cambiar el estado del repartidor.', error: error.message }); }
 };
 
-/**
- * @desc Registrar una nueva entrega para un repartidor
- * @route PATCH /api/repartidores/:id/registrar-entrega
- * @access Admin, Sistema de Pedidos
- * @body {string} pedidoId
- * @body {number} [calificacionCliente]
- * @body {Date} [fechaEntrega]
- */
 exports.registrarEntregaRepartidor = async (req, res) => {
-    try {
-        const { pedidoId, calificacionCliente, fechaEntrega } = req.body;
-        const repartidor = await Repartidor.findById(req.params.id).populate({
-            path: 'usuarioId',
-            select: 'username email nombre apellido telefono rolId',
-            populate: {
-                path: 'rolId',
-                select: 'nombre'
-            }
-        });
-
-        if (!repartidor) {
-            return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
-        }
-
-        await repartidor.registrarEntrega({ pedidoId, calificacionCliente, fechaEntrega });
-        res.status(200).json({ mensaje: 'Entrega registrada exitosamente', repartidor: repartidor });
-    } catch (error) {
-        console.error('Error al registrar entrega del repartidor:', error);
-        if (error.name === 'CastError') {
-            return res.status(400).json({ mensaje: 'ID de repartidor o pedido inválido.' });
-        }
-        res.status(500).json({ mensaje: 'Error interno del servidor al registrar la entrega del repartidor.', error: error.message });
-    }
+  const transaction = await sequelize.transaction();
+  try {
+    const { pedidoId, calificacionCliente, fechaEntrega } = req.body;
+    const repartidor = await Repartidor.findByPk(req.params.id, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!repartidor) { await transaction.rollback(); return res.status(404).json({ mensaje: 'Repartidor no encontrado.' }); }
+    const pedido = await Pedido.findByPk(pedidoId, { transaction });
+    if (!pedido || Number(pedido.repartidorId) !== Number(repartidor.id)) { await transaction.rollback(); return res.status(404).json({ mensaje: 'El pedido no existe o no está asignado a este repartidor.' }); }
+    if (pedido.estado !== 'entregado') { await transaction.rollback(); return res.status(400).json({ mensaje: 'Solo se pueden registrar entregas de pedidos entregados.' }); }
+    const historial = Array.isArray(repartidor.historialEntregas) ? [...repartidor.historialEntregas] : [];
+    if (historial.some(item => Number(item.pedidoId) === Number(pedidoId))) { await transaction.rollback(); return res.status(409).json({ mensaje: 'La entrega de este pedido ya fue registrada.' }); }
+    if (calificacionCliente !== undefined && (Number(calificacionCliente) < 1 || Number(calificacionCliente) > 5)) { await transaction.rollback(); return res.status(400).json({ mensaje: 'La calificación debe estar entre 1 y 5.' }); }
+    historial.push({ pedidoId: Number(pedidoId), fechaEntrega: fechaEntrega || new Date(), ...(calificacionCliente !== undefined ? { calificacionCliente: Number(calificacionCliente) } : {}) });
+    const calificaciones = historial.filter(x => x.calificacionCliente !== undefined).map(x => Number(x.calificacionCliente));
+    await repartidor.update({ historialEntregas: historial, ...(calificaciones.length ? { calificacionPromedio: calificaciones.reduce((a, b) => a + b, 0) / calificaciones.length } : {}) }, { transaction });
+    await transaction.commit();
+    const resultado = await Repartidor.findByPk(repartidor.id, { include: [usuarioInclude] });
+    return res.status(200).json({ mensaje: 'Entrega registrada exitosamente', repartidor: resultado });
+  } catch (error) { if (!transaction.finished) await transaction.rollback(); console.error('Error al registrar entrega del repartidor:', error); return res.status(500).json({ mensaje: 'Error interno del servidor al registrar la entrega del repartidor.', error: error.message }); }
 };
+
 exports.getRepartidorByUsuarioId = async (req, res) => {
-    try {
-        const { usuarioId } = req.params;
-        const repartidor = await Repartidor.findOne({ usuarioId }).populate({
-            path: 'usuarioId',
-            select: 'username email nombre apellido telefono rolId',
-            populate: {
-                path: 'rolId',
-                select: 'nombre'
-            }
-        });
-
-        if (!repartidor) {
-            return res.status(404).json({ mensaje: 'Perfil de repartidor no encontrado para el usuario dado.' });
-        }
-
-        // Opcional: Reforzar la autorización si req.user está disponible
-        if (req.user && req.user.rol === 'repartidor' && repartidor.usuarioId._id.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ mensaje: 'Acceso denegado. No tienes permiso para ver este perfil de repartidor.' });
-        }
-
-        res.status(200).json(repartidor);
-    } catch (error) {
-        console.error('Error al obtener repartidor por usuarioId:', error);
-        if (error.name === 'CastError') {
-            return res.status(400).json({ mensaje: 'ID de usuario inválido.' });
-        }
-        res.status(500).json({ mensaje: 'Error interno del servidor al obtener el repartidor por usuarioId.', error: error.message });
-    }
+  try {
+    const repartidor = await Repartidor.findOne({ where: { usuarioId: req.params.usuarioId }, include: [usuarioInclude] });
+    if (!repartidor) return res.status(404).json({ mensaje: 'Perfil de repartidor no encontrado para el usuario dado.' });
+    if (req.usuario?.rol === 'repartidor' && !propietario(repartidor, req)) return res.status(403).json({ mensaje: 'Acceso denegado. No tienes permiso para ver este perfil de repartidor.' });
+    return res.status(200).json(repartidor);
+  } catch (error) { console.error('Error al obtener repartidor por usuarioId:', error); return res.status(400).json({ mensaje: 'ID de usuario inválido.', error: error.message }); }
 };

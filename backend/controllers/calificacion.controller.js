@@ -1,521 +1,132 @@
-const Calificacion = require('../models/Calificacion');
-const Pedido = require('../models/pedido'); // Para verificar que el pedido existe y ya fue entregado
-const Cliente = require('../models/cliente.model'); // Para verificar que el cliente existe y obtener el clienteId
-const Producto = require('../models/producto'); // Para verificar productos en calificaciones específicas
-
-// --- Operaciones CRUD Básicas ---
+const { Op } = require('sequelize');
+const { Calificacion, Pedido, Cliente, Producto, Repartidor } = require('../models');
+const uid = req => req.usuario?.id ?? req.usuario?._id;
+const clienteUsuario = usuarioId => Cliente.findOne({ where: { usuarioId } });
+const includes = [{ model: Pedido, as: 'pedido', attributes: ['id', 'fechaPedido', 'estado', 'repartidorId'] }, { model: Cliente, as: 'cliente', include: [{ model: require('../models/usuario'), as: 'usuario', attributes: ['id', 'nombre', 'apellido', 'email'] }] }];
+const pageOptions = req => ({ page: Math.max(1, parseInt(req.query.page, 10) || 1), limit: Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50)) });
+const paginated = (rows, count, page, limit) => ({ calificaciones: rows, paginacion: { total: count, pagina: page, limite: limit, totalPaginas: Math.ceil(count / limit), tieneSiguiente: page < Math.ceil(count / limit), tieneAnterior: page > 1 } });
+const serverError = (res, message, error) => res.status(500).json({ mensaje: message, error: error.message });
 
 exports.crearCalificacion = async (req, res) => {
   try {
-    const {
-      pedidoId,
-      puntuacionComida,
-      puntuacionServicio,
-      puntuacionEntrega,
-      comentario,
-      calificacionProductos
-    } = req.body;
-
-    // Obtener el usuarioId del token JWT
-    const usuarioId = req.usuario._id;
-
-    // Verificar que el usuario autenticado sea un cliente
-    if (req.usuario.rol !== 'cliente') {
-      return res.status(403).json({ mensaje: 'Solo los clientes pueden crear calificaciones.' });
+    if (req.usuario.rol !== 'cliente') return res.status(403).json({ mensaje: 'Solo los clientes pueden crear calificaciones.' });
+    const { pedidoId, puntuacionComida, puntuacionServicio, puntuacionEntrega, comentario, calificacionProductos = [] } = req.body;
+    const cliente = await clienteUsuario(uid(req));
+    if (!cliente) return res.status(404).json({ mensaje: 'Perfil de cliente no encontrado.' });
+    const pedido = await Pedido.findByPk(pedidoId);
+    if (!pedido) return res.status(404).json({ mensaje: 'Pedido no encontrado.' });
+    if (pedido.estado !== 'entregado') return res.status(400).json({ mensaje: 'Solo se pueden calificar pedidos que ya han sido entregados.' });
+    if (Number(pedido.clienteId) !== Number(cliente.id)) return res.status(403).json({ mensaje: 'No tiene permiso para calificar este pedido.' });
+    if (await Calificacion.findOne({ where: { pedidoId } })) return res.status(409).json({ mensaje: 'Este pedido ya ha sido calificado.' });
+    if (!Array.isArray(calificacionProductos)) return res.status(400).json({ mensaje: 'calificacionProductos debe ser un array.' });
+    const productosPedido = pedido.detalleProductos || [];
+    const detalleCalificado = [];
+    for (const item of calificacionProductos) {
+      const comprado = productosPedido.find(p => String(p.productoId) === String(item.productoId));
+      if (!comprado) return res.status(400).json({ mensaje: `El producto con ID ${item.productoId} no es parte de este pedido.` });
+      const producto = await Producto.findByPk(item.productoId);
+      const puntuacion = Number(item.puntuacion);
+      if (!Number.isInteger(puntuacion) || puntuacion < 1 || puntuacion > 5) return res.status(400).json({ mensaje: 'La puntuación de cada producto debe estar entre 1 y 5.' });
+      detalleCalificado.push({ productoId: Number(item.productoId), nombreProducto: producto?.nombre || comprado.nombreProducto || 'Producto', puntuacion, comentario: item.comentario || '' });
     }
-
-    // Buscar el cliente asociado a este usuario
-    const cliente = await Cliente.findOne({ usuarioId: usuarioId });
-    if (!cliente) {
-      return res.status(404).json({ mensaje: 'Perfil de cliente no encontrado.' });
-    }
-    const clienteId = cliente._id;
-
-    console.log('DEBUG - Usuario ID del token:', usuarioId);
-    console.log('DEBUG - Cliente encontrado:', cliente._id);
-    console.log('DEBUG - Cliente ID:', clienteId);
-
-    // 1. Verificar que el pedido exista y esté en estado 'entregado'
-    const pedido = await Pedido.findById(pedidoId);
-    if (!pedido) {
-      return res.status(404).json({ mensaje: 'Pedido no encontrado.' });
-    }
-    if (pedido.estado !== 'entregado') {
-      return res.status(400).json({ mensaje: 'Solo se pueden calificar pedidos que ya han sido entregados.' });
-    }
-    
-    // Asegurarse de que el cliente de la calificación sea el mismo que el del pedido
-    console.log('DEBUG - Pedido Cliente ID:', pedido.clienteId.toString());
-    console.log('DEBUG - Cliente ID del token:', clienteId.toString());
-    console.log('DEBUG - Comparación:', pedido.clienteId.toString() === clienteId.toString());
-
-    if (pedido.clienteId.toString() !== clienteId.toString()) {
-      return res.status(403).json({ mensaje: 'No tiene permiso para calificar este pedido.' });
-    }
-
-    // 2. Verificar si ya existe una calificación para este pedido
-    const calificacionExistente = await Calificacion.findOne({ pedidoId });
-    if (calificacionExistente) {
-      return res.status(409).json({ mensaje: 'Este pedido ya ha sido calificado.' });
-    }
-
-    // 3. Validar que los productos calificados pertenecen a este pedido
-    if (calificacionProductos && calificacionProductos.length > 0) {
-      const pedidoProductIds = pedido.detalleProductos.map(item => item.productoId.toString());
-      for (const prodCal of calificacionProductos) {
-        if (!pedidoProductIds.includes(prodCal.productoId.toString())) {
-          return res.status(400).json({ mensaje: `El producto con ID ${prodCal.productoId} no es parte de este pedido.` });
-        }
-        // Opcional: Obtener el nombre del producto para guardarlo en la calificación
-        const producto = await Producto.findById(prodCal.productoId);
-        if (producto) {
-          prodCal.nombreProducto = producto.nombre;
-        } else {
-          // Si el producto original no se encuentra, usar el del pedido o dar error
-          const itemEnPedido = pedido.detalleProductos.find(item => item.productoId.toString() === prodCal.productoId.toString());
-          prodCal.nombreProducto = itemEnPedido ? itemEnPedido.nombreProducto : 'Producto Desconocido';
-        }
+    const calificacion = await Calificacion.create({ pedidoId, clienteId: cliente.id, puntuacionComida, puntuacionServicio, puntuacionEntrega, comentario, calificacionProductos: detalleCalificado });
+    if (pedido.repartidorId) {
+      const repartidor = await Repartidor.findByPk(pedido.repartidorId);
+      if (repartidor) {
+        const historial = [...(repartidor.historialEntregas || [])];
+        const index = historial.findIndex(x => String(x.pedidoId) === String(pedido.id));
+        const entrega = { pedidoId: pedido.id, fechaEntrega: new Date(), calificacionCliente: Number(puntuacionEntrega) };
+        if (index >= 0) historial[index] = { ...historial[index], ...entrega }; else historial.push(entrega);
+        repartidor.historialEntregas = historial;
+        const scores = historial.map(x => Number(x.calificacionCliente)).filter(x => Number.isFinite(x) && x >= 1 && x <= 5);
+        repartidor.calificacionPromedio = scores.length ? scores.reduce((a,b) => a+b, 0) / scores.length : 0;
+        await repartidor.save();
       }
     }
-
-    const nuevaCalificacion = new Calificacion({
-      pedidoId,
-      clienteId,
-      puntuacionComida,
-      puntuacionServicio,
-      puntuacionEntrega,
-      comentario,
-      calificacionProductos,
-    });
-
-    console.log('DEBUG - Nueva calificación a guardar:', {
-      pedidoId,
-      clienteId,
-      puntuacionComida,
-      puntuacionServicio,
-      puntuacionEntrega,
-      comentario
-    });
-    console.log('DEBUG - Tipos de datos a guardar:', {
-      puntuacionComida: typeof puntuacionComida,
-      puntuacionServicio: typeof puntuacionServicio,
-      puntuacionEntrega: typeof puntuacionEntrega
-    });
-
-    await nuevaCalificacion.save();
-
-    console.log('DEBUG - Calificación guardada:', nuevaCalificacion);
-    console.log('DEBUG - Valores guardados:', {
-      puntuacionComida: nuevaCalificacion.puntuacionComida,
-      puntuacionServicio: nuevaCalificacion.puntuacionServicio,
-      puntuacionEntrega: nuevaCalificacion.puntuacionEntrega
-    });
-
-    res.status(201).json({
-      mensaje: 'Calificación creada exitosamente',
-      calificacion: nuevaCalificacion
-    });
+    return res.status(201).json({ mensaje: 'Calificación creada exitosamente', calificacion });
   } catch (error) {
-    console.error('Error al crear la calificación:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al crear la calificación',
-      error: error.message
-    });
+    if (error.name === 'SequelizeUniqueConstraintError') return res.status(409).json({ mensaje: 'Este pedido ya ha sido calificado.' });
+    if (error.name === 'SequelizeValidationError') return res.status(400).json({ mensaje: 'Datos de calificación inválidos.', error: error.message });
+    return serverError(res, 'Error interno del servidor al crear la calificación', error);
   }
 };
 
 exports.obtenerCalificaciones = async (req, res) => {
   try {
-    console.log('=== INICIO obtenerCalificaciones ===');
-    console.log('Usuario:', req.usuario?.rol, req.usuario?._id);
-    console.log('Query params:', req.query);
-
-    // Paginación para evitar cargar demasiadas calificaciones de una vez
-    const page = parseInt(req.query.page) || 1;
-    const limit = Math.min(parseInt(req.query.limit) || 50, 200); // Límite por defecto de 50, máximo 200
-    const skip = (page - 1) * limit;
-
-    let query = {};
-    let totalCalificaciones = 0;
-    let calificaciones;
-
-    // Si es admin, obtener todas las calificaciones
-    if (req.usuario.rol === 'admin') {
-      // Contar total sin límite
-      try {
-        totalCalificaciones = await Calificacion.countDocuments(query);
-      } catch (countError) {
-        console.error('Error al contar calificaciones:', countError);
-        totalCalificaciones = 0;
-      }
-
-      calificaciones = await Calificacion.find(query)
-        .populate('pedidoId', 'fechaPedido estado _id')
-        .populate('clienteId', 'nombre apellido email')
-        .sort({ fechaCalificacion: -1 })
-        .limit(limit)
-        .skip(skip)
-        .lean();
-    } else {
-      // Si es cliente, obtener solo sus calificaciones
-      const cliente = await Cliente.findOne({ usuarioId: req.usuario._id });
-      if (!cliente) {
-        return res.status(404).json({ mensaje: 'Perfil de cliente no encontrado.' });
-      }
-
-      query.clienteId = cliente._id;
-
-      // Contar total sin límite
-      try {
-        totalCalificaciones = await Calificacion.countDocuments(query);
-      } catch (countError) {
-        console.error('Error al contar calificaciones:', countError);
-        totalCalificaciones = 0;
-      }
-
-      calificaciones = await Calificacion.find(query)
-        .populate('pedidoId', 'fechaPedido estado _id')
-        .sort({ fechaCalificacion: -1 })
-        .limit(limit)
-        .skip(skip)
-        .lean();
+    let where = {};
+    if (req.usuario.rol !== 'admin') {
+      if (req.usuario.rol !== 'cliente') return res.status(403).json({ mensaje: 'No tiene permisos para consultar calificaciones.' });
+      const cliente = await clienteUsuario(uid(req));
+      if (!cliente) return res.status(404).json({ mensaje: 'Perfil de cliente no encontrado.' });
+      where.clienteId = cliente.id;
     }
-
-    console.log('DEBUG - Calificaciones encontradas:', calificaciones.length);
-    console.log('DEBUG - Total de calificaciones (sin límite):', totalCalificaciones);
-    console.log('DEBUG - Página:', page, 'Límite:', limit);
-
-    if (calificaciones.length > 0) {
-      console.log('DEBUG - Primera calificación:', {
-        _id: calificaciones[0]._id,
-        puntuacionComida: calificaciones[0].puntuacionComida,
-        puntuacionServicio: calificaciones[0].puntuacionServicio,
-        puntuacionEntrega: calificaciones[0].puntuacionEntrega,
-        pedidoId: calificaciones[0].pedidoId
-      });
-    }
-
-    // Retornar calificaciones con información de paginación
-    res.status(200).json({
-      calificaciones: calificaciones,
-      paginacion: {
-        total: totalCalificaciones,
-        pagina: page,
-        limite: limit,
-        totalPaginas: Math.ceil(totalCalificaciones / limit),
-        tieneSiguiente: page < Math.ceil(totalCalificaciones / limit),
-        tieneAnterior: page > 1
-      }
-    });
-  } catch (error) {
-    console.error('=== ERROR al obtener calificaciones ===');
-    console.error('Error completo:', error);
-    console.error('Stack:', error.stack);
-    
-    if (!res.headersSent) {
-      res.status(500).json({
-        mensaje: 'Error interno del servidor al obtener calificaciones',
-        error: error.message || 'Error desconocido'
-      });
-    }
-  }
+    const { page, limit } = pageOptions(req);
+    const result = await Calificacion.findAndCountAll({ where, include: req.usuario.rol === 'admin' ? includes : [includes[0]], order: [['fechaCalificacion','DESC']], limit, offset: (page-1)*limit, distinct: true });
+    return res.json({ ...paginated(result.rows, result.count, page, limit) });
+  } catch (error) { return serverError(res, 'Error interno del servidor al obtener calificaciones', error); }
 };
 
 exports.obtenerCalificacionPorId = async (req, res) => {
   try {
-    const calificacion = await Calificacion.findById(req.params.id)
-      .populate('pedidoId', 'fechaPedido estado')
-      .populate('clienteId', 'nombre apellido email');
-    
-    if (!calificacion) {
-      return res.status(404).json({
-        mensaje: 'Calificación no encontrada'
-      });
-    }
-
-    // Verificar permisos si es cliente
-    if (req.usuario.rol === 'cliente') {
-      const cliente = await Cliente.findOne({ usuarioId: req.usuario._id });
-      if (!cliente || calificacion.clienteId.toString() !== cliente._id.toString()) {
-        return res.status(403).json({
-          mensaje: 'No tienes permisos para ver esta calificación'
-        });
-      }
-    }
-
-    res.status(200).json(calificacion);
-  } catch (error) {
-    console.error('Error al obtener calificación por ID:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al obtener calificación',
-      error: error.message
-    });
-  }
+    const calificacion = await Calificacion.findByPk(req.params.id, { include: includes });
+    if (!calificacion) return res.status(404).json({ mensaje: 'Calificación no encontrada' });
+    if (req.usuario.rol === 'cliente') { const cliente = await clienteUsuario(uid(req)); if (!cliente || Number(calificacion.clienteId) !== Number(cliente.id)) return res.status(403).json({ mensaje: 'No tienes permisos para ver esta calificación' }); }
+    return res.json(calificacion);
+  } catch (error) { return serverError(res, 'Error interno del servidor al obtener calificación', error); }
 };
 
 exports.eliminarCalificacion = async (req, res) => {
   try {
-    // Obtener el usuarioId del token JWT
-    const usuarioId = req.usuario._id;
-
-    // Buscar el cliente asociado a este usuario
-    const cliente = await Cliente.findOne({ usuarioId: usuarioId });
-    if (!cliente) {
-      return res.status(404).json({ mensaje: 'Perfil de cliente no encontrado.' });
-    }
-
-    // Buscar la calificación y verificar que pertenece al cliente autenticado
-    const calificacion = await Calificacion.findById(req.params.id);
-    if (!calificacion) {
-      return res.status(404).json({
-        mensaje: 'Calificación no encontrada'
-      });
-    }
-
-    // Verificar que la calificación pertenece al cliente autenticado
-    if (calificacion.clienteId.toString() !== cliente._id.toString()) {
-      return res.status(403).json({
-        mensaje: 'No tienes permisos para eliminar esta calificación'
-      });
-    }
-
-    // Eliminar la calificación usando deleteOne en el documento
-    await calificacion.deleteOne();
-
-    res.status(200).json({
-      mensaje: 'Calificación eliminada exitosamente'
-    });
-  } catch (error) {
-    console.error('Error al eliminar la calificación:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al eliminar la calificación',
-      error: error.message
-    });
-  }
+    const cliente = await clienteUsuario(uid(req));
+    if (!cliente) return res.status(404).json({ mensaje: 'Perfil de cliente no encontrado.' });
+    const calificacion = await Calificacion.findByPk(req.params.id);
+    if (!calificacion) return res.status(404).json({ mensaje: 'Calificación no encontrada' });
+    if (Number(calificacion.clienteId) !== Number(cliente.id) && req.usuario.rol !== 'admin') return res.status(403).json({ mensaje: 'No tienes permisos para eliminar esta calificación' });
+    await calificacion.destroy();
+    return res.json({ mensaje: 'Calificación eliminada exitosamente' });
+  } catch (error) { return serverError(res, 'Error interno del servidor al eliminar la calificación', error); }
 };
-
-// --- Funciones de Búsqueda y Filtrado (Adicionales) ---
 
 exports.getCalificacionesPorCliente = async (req, res) => {
   try {
     const { clienteId } = req.params;
-    
-    // Verificar permisos: solo admin puede ver calificaciones de otros clientes
-    if (req.usuario.rol === 'cliente') {
-      const cliente = await Cliente.findOne({ usuarioId: req.usuario._id });
-      if (!cliente || cliente._id.toString() !== clienteId) {
-        return res.status(403).json({
-          mensaje: 'No tienes permisos para ver las calificaciones de otro cliente'
-        });
-      }
-    }
-
-    // Paginación
-    const page = parseInt(req.query.page) || 1;
-    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
-    const skip = (page - 1) * limit;
-
-    const query = { clienteId };
-
-    // Contar total
-    let totalCalificaciones;
-    try {
-      totalCalificaciones = await Calificacion.countDocuments(query);
-    } catch (countError) {
-      console.error('Error al contar calificaciones:', countError);
-      totalCalificaciones = 0;
-    }
-
-    const calificaciones = await Calificacion.find(query)
-      .populate('pedidoId', 'fechaPedido')
-      .sort({ fechaCalificacion: -1 })
-      .limit(limit)
-      .skip(skip)
-      .lean();
-    
-    res.status(200).json({
-      calificaciones: calificaciones,
-      paginacion: {
-        total: totalCalificaciones,
-        pagina: page,
-        limite: limit,
-        totalPaginas: Math.ceil(totalCalificaciones / limit),
-        tieneSiguiente: page < Math.ceil(totalCalificaciones / limit),
-        tieneAnterior: page > 1
-      }
-    });
-  } catch (error) {
-    console.error('Error al obtener calificaciones por cliente:', error);
-    if (!res.headersSent) {
-      res.status(500).json({
-        mensaje: 'Error interno del servidor al obtener calificaciones por cliente',
-        error: error.message || 'Error desconocido'
-      });
-    }
-  }
+    if (req.usuario.rol === 'cliente') { const cliente = await clienteUsuario(uid(req)); if (!cliente || Number(cliente.id) !== Number(clienteId)) return res.status(403).json({ mensaje: 'No tienes permisos para ver las calificaciones de otro cliente' }); }
+    else if (req.usuario.rol !== 'admin') return res.status(403).json({ mensaje: 'No tiene permisos para consultar calificaciones.' });
+    const { page, limit } = pageOptions(req);
+    const result = await Calificacion.findAndCountAll({ where: { clienteId }, include: [includes[0]], order: [['fechaCalificacion','DESC']], limit, offset: (page-1)*limit, distinct: true });
+    return res.json(paginated(result.rows, result.count, page, limit));
+  } catch (error) { return serverError(res, 'Error interno del servidor al obtener calificaciones por cliente', error); }
 };
 
 exports.getCalificacionesPorPedido = async (req, res) => {
   try {
-    const { pedidoId } = req.params;
-    
-    const calificacion = await Calificacion.findOne({ pedidoId })
-      .populate('pedidoId', 'fechaPedido estado')
-      .populate('clienteId', 'nombre apellido email');
-
-    if (!calificacion) {
-      return res.status(404).json({ mensaje: 'No se encontró calificación para este pedido.' });
-    }
-
-    // Verificar permisos si es cliente
-    if (req.usuario.rol === 'cliente') {
-      const cliente = await Cliente.findOne({ usuarioId: req.usuario._id });
-      if (!cliente || calificacion.clienteId.toString() !== cliente._id.toString()) {
-        return res.status(403).json({
-          mensaje: 'No tienes permisos para ver esta calificación'
-        });
-      }
-    }
-
-    res.status(200).json(calificacion);
-  } catch (error) {
-    console.error('Error al obtener calificación por pedido:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al obtener calificación por pedido',
-      error: error.message
-    });
-  }
+    const calificacion = await Calificacion.findOne({ where: { pedidoId: req.params.pedidoId }, include: includes });
+    if (!calificacion) return res.status(404).json({ mensaje: 'No se encontró calificación para este pedido.' });
+    if (req.usuario.rol === 'cliente') { const cliente = await clienteUsuario(uid(req)); if (!cliente || Number(calificacion.clienteId) !== Number(cliente.id)) return res.status(403).json({ mensaje: 'No tienes permisos para ver esta calificación' }); }
+    return res.json(calificacion);
+  } catch (error) { return serverError(res, 'Error interno del servidor al obtener calificación por pedido', error); }
 };
 
-/**
- * @desc Obtiene las calificaciones de entrega para un repartidor específico
- * @route GET /api/calificaciones/repartidor/:repartidorId
- * @access Admin, Repartidor (para su propio perfil)
- */
 exports.getCalificacionesPorRepartidor = async (req, res) => {
   try {
-    const { repartidorId } = req.params;
-
-    // Verificar que el repartidor existe
-    const Repartidor = require('../models/Repartidor');
-    const repartidor = await Repartidor.findById(repartidorId);
-    if (!repartidor) {
-      return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
-    }
-
-    // Verificar autorización: solo admin o el propio repartidor puede ver sus calificaciones
-    if (req.usuario.rol === 'repartidor' && repartidor.usuarioId.toString() !== req.usuario._id.toString()) {
-      return res.status(403).json({ mensaje: 'No tienes permisos para ver las calificaciones de otro repartidor.' });
-    }
-
-    // Buscar todos los pedidos asignados a este repartidor
-    const pedidosRepartidor = await Pedido.find({
-      repartidorId: repartidorId,
-      estado: 'entregado' // Solo pedidos entregados
-    }).select('_id fechaPedido');
-
-    const pedidosIds = pedidosRepartidor.map(pedido => pedido._id);
-
-    // Paginación
-    const page = parseInt(req.query.page) || 1;
-    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
-    const skip = (page - 1) * limit;
-
-    const query = { pedidoId: { $in: pedidosIds } };
-
-    // Contar total
-    let totalCalificaciones;
-    try {
-      totalCalificaciones = await Calificacion.countDocuments(query);
-    } catch (countError) {
-      console.error('Error al contar calificaciones:', countError);
-      totalCalificaciones = 0;
-    }
-
-    // Buscar calificaciones para estos pedidos con paginación
-    const calificaciones = await Calificacion.find(query)
-      .populate('pedidoId', 'fechaPedido estado')
-      .populate('clienteId', 'nombre apellido')
-      .sort({ fechaCalificacion: -1 })
-      .limit(limit)
-      .skip(skip)
-      .lean();
-
-    // Formatear la respuesta para incluir solo la calificación de entrega
-    const calificacionesFormateadas = calificaciones.map(cal => ({
-      _id: cal._id,
-      pedidoId: cal.pedidoId,
-      clienteId: cal.clienteId,
-      puntuacionEntrega: cal.puntuacionEntrega, // Solo la calificación de entrega
-      comentario: cal.comentario,
-      fechaCalificacion: cal.fechaCalificacion
-    }));
-
-    res.status(200).json({
-      repartidor: {
-        _id: repartidor._id,
-        calificacionPromedio: repartidor.calificacionPromedio,
-        totalEntregas: repartidor.historialEntregas.length
-      },
-      calificaciones: calificacionesFormateadas,
-      totalCalificaciones: totalCalificaciones,
-      paginacion: {
-        total: totalCalificaciones,
-        pagina: page,
-        limite: limit,
-        totalPaginas: Math.ceil(totalCalificaciones / limit),
-        tieneSiguiente: page < Math.ceil(totalCalificaciones / limit),
-        tieneAnterior: page > 1
-      }
-    });
-
-  } catch (error) {
-    console.error('Error al obtener calificaciones por repartidor:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al obtener calificaciones por repartidor',
-      error: error.message
-    });
-  }
+    const repartidor = await Repartidor.findByPk(req.params.repartidorId);
+    if (!repartidor) return res.status(404).json({ mensaje: 'Repartidor no encontrado.' });
+    if (req.usuario.rol === 'repartidor' && Number(repartidor.usuarioId) !== Number(uid(req))) return res.status(403).json({ mensaje: 'No tienes permisos para ver las calificaciones de otro repartidor.' });
+    if (!['admin','repartidor'].includes(req.usuario.rol)) return res.status(403).json({ mensaje: 'Acceso denegado.' });
+    const pedidos = await Pedido.findAll({ where: { repartidorId: repartidor.id, estado: 'entregado' }, attributes: ['id'] });
+    const { page, limit } = pageOptions(req);
+    const result = await Calificacion.findAndCountAll({ where: { pedidoId: { [Op.in]: pedidos.map(p => p.id) } }, include: includes, order: [['fechaCalificacion','DESC']], limit, offset: (page-1)*limit, distinct: true });
+    const rows = result.rows.map(c => ({ id: c.id, _id: c.id, pedidoId: c.pedido, clienteId: c.cliente, puntuacionEntrega: c.puntuacionEntrega, comentario: c.comentario, fechaCalificacion: c.fechaCalificacion }));
+    return res.json({ repartidor: { id: repartidor.id, _id: repartidor.id, calificacionPromedio: repartidor.calificacionPromedio, totalEntregas: (repartidor.historialEntregas || []).length }, calificaciones: rows, totalCalificaciones: result.count, paginacion: { total: result.count, pagina: page, limite: limit, totalPaginas: Math.ceil(result.count/limit), tieneSiguiente: page < Math.ceil(result.count/limit), tieneAnterior: page > 1 } });
+  } catch (error) { return serverError(res, 'Error interno del servidor al obtener calificaciones por repartidor', error); }
 };
 
 exports.getCalificacionesPromedioProducto = async (req, res) => {
   try {
-    const { productoId } = req.params; // ID del producto
-
-    // Calcula el promedio desde el JSONB de PostgreSQL.
-    const calificaciones = await Calificacion.findAll({
-      attributes: ['calificacionProductos'],
-      raw: true
-    });
-
-    const puntuaciones = [];
-    let nombreProducto = null;
-    for (const registro of calificaciones) {
-      for (const item of (registro.calificacionProductos || [])) {
-        if (String(item.productoId) === String(productoId)) {
-          puntuaciones.push(Number(item.puntuacion));
-          nombreProducto = item.nombreProducto || nombreProducto;
-        }
-      }
-    }
-
-    const result = puntuaciones.length ? [{
-      _id: productoId,
-      nombreProducto,
-      puntuacionPromedio: puntuaciones.reduce((a, b) => a + b, 0) / puntuaciones.length,
-      totalCalificaciones: puntuaciones.length
-    }] : [];
-
-    if (result.length === 0) {
-      return res.status(404).json({ mensaje: 'Producto no encontrado o sin calificaciones.' });
-    }
-
-    res.status(200).json(result[0]);
-  } catch (error) {
-    console.error('Error al obtener calificaciones promedio por producto:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al obtener calificaciones promedio por producto',
-      error: error.message
-    });
-  }
+    const registros = await Calificacion.findAll({ attributes: ['calificacionProductos'], raw: true });
+    const scores = []; let nombreProducto = null;
+    for (const row of registros) for (const item of (row.calificacionProductos || [])) if (String(item.productoId) === String(req.params.productoId)) { scores.push(Number(item.puntuacion)); nombreProducto = item.nombreProducto || nombreProducto; }
+    if (!scores.length) return res.status(404).json({ mensaje: 'Producto no encontrado o sin calificaciones.' });
+    return res.json({ _id: req.params.productoId, nombreProducto, puntuacionPromedio: scores.reduce((a,b)=>a+b,0)/scores.length, totalCalificaciones: scores.length });
+  } catch (error) { return serverError(res, 'Error interno del servidor al obtener calificaciones promedio por producto', error); }
 };

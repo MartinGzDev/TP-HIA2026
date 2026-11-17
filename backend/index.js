@@ -47,7 +47,7 @@ app.use('/api/rol', autenticar, autorizar(['admin']), rolRoutes);
 app.use('/api/usuario', autenticar, autorizar(['admin']), usuarioRoutes);
 app.use('/api/pedido', autenticar, autorizar(['admin', 'cliente', 'repartidor', 'supervisor_cocina', 'supervisor_ventas']), pedidoRoutes);
 app.use('/api/ventas', autenticar, autorizar(['admin', 'supervisor_ventas', 'supervisor_cocina']), ventaRoutes);
-app.use('/api/calificaciones', autenticar, autorizar(['cliente']), calificacionRoutes);
+app.use('/api/calificaciones', autenticar, autorizar(['admin', 'cliente', 'repartidor', 'supervisor_ventas', 'supervisor_cocina']), calificacionRoutes);
 
 app.use('/api/categorias', categoriaRoutes);
 app.use('/api/productos', productoRoutes);

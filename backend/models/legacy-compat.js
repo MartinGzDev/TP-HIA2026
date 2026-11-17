@@ -1,5 +1,5 @@
-// Adaptador temporal para mantener compatibles las consultas heredadas de Mongoose
-// mientras los controladores se migran progresivamente a la API nativa de Sequelize.
+// Capa de compatibilidad de consultas heredadas, implementada íntegramente sobre Sequelize/PostgreSQL.
+// No utiliza Mongoose ni realiza conexiones a MongoDB.
 const { Op } = require('sequelize');
 
 function translateWhere(input = {}) {
@@ -103,7 +103,27 @@ class LegacyQuery {
     return this;
   }
   sort(value) {
-    this.options.order = Object.entries(value || {}).map(([field, dir]) => [field, Number(dir) < 0 || String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC']);
+    let order = [];
+
+    if (typeof value === 'string') {
+      order = value.trim().split(/\s+/).filter(Boolean).map(field => {
+        const descending = field.startsWith('-');
+        const attribute = field.replace(/^[-+]/, '');
+
+        return [attribute, descending ? 'DESC' : 'ASC'];
+      });
+    } else if (Array.isArray(value)) {
+      order = value;
+    } else if (value && typeof value === 'object') {
+      order = Object.entries(value).map(([field, dir]) => [
+        field,
+        Number(dir) < 0 || String(dir).toLowerCase() === 'desc'
+          ? 'DESC'
+          : 'ASC'
+      ]);
+    }
+
+    this.options.order = order;
     return this;
   }
   skip(value) { this.options.offset = Number(value) || 0; return this; }
@@ -160,22 +180,31 @@ function installLegacyCompat(Model) {
   if (Model.__legacyCompatInstalled) return;
   Model.__legacyCompatInstalled = true;
   const originalFindOne = Model.findOne.bind(Model);
-  Model.findOne = function(options = {}) {
+  Model.findOne = function (options = {}) {
     if (options && (Object.prototype.hasOwnProperty.call(options, 'where') || options.include || options.transaction || options.attributes || options.order)) return originalFindOne(options);
     return new LegacyQuery(Model, 'findOne', [options]);
   };
-  Model.find = function(query = {}) { return new LegacyQuery(Model, 'find', [query]); };
-  Model.findById = function(id) { return new LegacyQuery(Model, 'findById', [id]); };
-  Model.findByIdAndUpdate = function(id, update, options = {}) { return new LegacyQuery(Model, 'findByIdAndUpdate', [id, update, options]); };
-  Model.findByIdAndDelete = function(id) { return new LegacyQuery(Model, 'findByIdAndDelete', [id]); };
-  Model.findOneAndUpdate = function(query, update, options = {}) { return new LegacyQuery(Model, 'findOneAndUpdate', [query, update, options]); };
-  Model.countDocuments = function(query = {}) { return Model.count({ where: translateWhere(query) }); };
+  Model.find = function (query = {}) { return new LegacyQuery(Model, 'find', [query]); };
+  Model.findById = function (id) { return new LegacyQuery(Model, 'findById', [id]); };
+  Model.findByIdAndUpdate = function (id, update, options = {}) { return new LegacyQuery(Model, 'findByIdAndUpdate', [id, update, options]); };
+  Model.findByIdAndDelete = function (id) { return new LegacyQuery(Model, 'findByIdAndDelete', [id]); };
+  Model.findOneAndUpdate = function (query, update, options = {}) { return new LegacyQuery(Model, 'findOneAndUpdate', [query, update, options]); };
+  Model.countDocuments = function (query = {}) { return Model.count({ where: translateWhere(query) }); };
+  // Equivalente Sequelize para las llamadas heredadas Model.deleteOne({ ... }).
+  Model.deleteOne = async function (query = {}, options = {}) {
+    const where = translateWhere(query);
+    const deletedCount = await Model.destroy({ where, ...options });
+    return { acknowledged: true, deletedCount };
+  };
   const originalCreate = Model.create.bind(Model);
-  Model.create = function(values, options) { return originalCreate(values, options); };
+  Model.create = function (values, options) { return originalCreate(values, options); };
   const proto = Model.prototype;
   if (!Object.getOwnPropertyDescriptor(proto, '_id')) Object.defineProperty(proto, '_id', { get() { return this.id; }, set(value) { this.id = value; } });
+  // Compatibilidad de serialización: Sequelize usa get({ plain: true }), no toObject().
+  if (!proto.toObject) proto.toObject = function () { return this.get({ plain: true }); };
+  if (!proto.deleteOne) proto.deleteOne = function (options) { return this.destroy(options); };
   const originalToJSON = proto.toJSON;
-  proto.toJSON = function() {
+  proto.toJSON = function () {
     const result = originalToJSON.call(this);
     result._id = this.id;
     if (this.usuario) {

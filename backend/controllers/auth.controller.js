@@ -3,6 +3,7 @@ const Usuario = require('../models/usuario');
 const Cliente = require('../models/cliente.model');
 const Repartidor = require('../models/Repartidor');
 const Rol = require('../models/rol');
+const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -23,9 +24,10 @@ const GOOGLE_CLIENT_ID = config.GOOGLE_CLIENT_ID;
 
 // REGISTRO
 exports.registerUser = async (req, res) => {
-  const transaction = await sequelize.transaction();
+  let transaction;
 
   try {
+    transaction = await sequelize.transaction();
     const {
       username, password, email, telefono, rolName, nombre, apellido,
       direccionCliente, fechaNacimientoCliente,
@@ -40,7 +42,11 @@ exports.registerUser = async (req, res) => {
       });
     }
 
-    if (rolName.toLowerCase() === 'cliente' && !direccionCliente) {
+    const usernameNormalizado = String(username).trim().toLowerCase();
+    const emailNormalizado = String(email).trim().toLowerCase();
+    const rolNormalizado = String(rolName).trim().toLowerCase();
+
+    if (rolNormalizado === 'cliente' && !direccionCliente) {
       await transaction.rollback();
       return res.status(400).json({
         mensaje: 'La dirección es obligatoria para el rol de cliente.'
@@ -49,9 +55,9 @@ exports.registerUser = async (req, res) => {
 
     const userExists = await Usuario.findOne({
       where: {
-        [require('sequelize').Op.or]: [
-          { username },
-          { email }
+        [Op.or]: [
+          { username: usernameNormalizado },
+          { email: emailNormalizado }
         ]
       },
       transaction
@@ -59,7 +65,7 @@ exports.registerUser = async (req, res) => {
 
     if (userExists) {
       await transaction.rollback();
-      const field = userExists.username === username
+      const field = userExists.username === usernameNormalizado
         ? 'nombre de usuario'
         : 'email';
 
@@ -69,7 +75,7 @@ exports.registerUser = async (req, res) => {
     }
 
     const foundRol = await Rol.findOne({
-      where: { nombre: rolName.toLowerCase() },
+      where: { nombre: rolNormalizado },
       transaction
     });
 
@@ -83,10 +89,10 @@ exports.registerUser = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const newUsuario = await Usuario.create({
-      username,
+      username: usernameNormalizado,
       password: hashedPassword,
-      email,
-      telefono: telefono || null,
+      email: emailNormalizado,
+      telefono: telefono ? String(telefono).trim() : null,
       rolId: foundRol.id,
       estado: true,
       nombre,
@@ -136,12 +142,13 @@ exports.registerUser = async (req, res) => {
         email: newUsuario.email,
         nombre: newUsuario.nombre,
         apellido: newUsuario.apellido,
+        telefono: newUsuario.telefono,
         rol: foundRol.nombre
       }
     });
 
   } catch (error) {
-    if (!transaction.finished) {
+    if (transaction && !transaction.finished) {
       await transaction.rollback();
     }
 
@@ -178,8 +185,13 @@ exports.loginUser = async (req, res) => {
       });
     }
 
+    // El modelo normaliza los usernames a minúsculas al registrarlos.
+    // Aplicamos la misma normalización al iniciar sesión para evitar
+    // fallos cuando el usuario escribe mayúsculas o espacios.
+    const usernameNormalizado = String(username).trim().toLowerCase();
+
     const user = await Usuario.findOne({
-      where: { username }
+      where: { username: usernameNormalizado }
     });
 
     if (!user) {
@@ -225,7 +237,8 @@ exports.loginUser = async (req, res) => {
         email: user.email,
         rol: rol.nombre,
         nombre: user.nombre,
-        apellido: user.apellido
+        apellido: user.apellido,
+        telefono: user.telefono
       }
     });
 
@@ -240,9 +253,10 @@ exports.loginUser = async (req, res) => {
 
 // LOGIN CON GOOGLE
 exports.googleLogin = async (req, res) => {
-  const transaction = await sequelize.transaction();
+  let transaction;
 
   try {
+    transaction = await sequelize.transaction();
     const { idToken } = req.body;
 
     if (!idToken) {
@@ -262,9 +276,15 @@ exports.googleLogin = async (req, res) => {
     const payload = ticket.getPayload();
 
     const {
-      email, name, given_name, family_name,
+      email: googleEmail, name, given_name, family_name,
       picture, sub: googleId
     } = payload;
+
+    const email = String(googleEmail || '').trim().toLowerCase();
+    if (!email) {
+      await transaction.rollback();
+      return res.status(400).json({ mensaje: 'La cuenta de Google no proporcionó un email válido.' });
+    }
 
     let user = await Usuario.findOne({
       where: { email },
@@ -334,13 +354,14 @@ exports.googleLogin = async (req, res) => {
         email: user.email,
         nombre: user.nombre,
         apellido: user.apellido,
+        telefono: user.telefono,
         rol: rol.nombre,
         picture
       }
     });
 
   } catch (error) {
-    if (!transaction.finished) {
+    if (transaction && !transaction.finished) {
       await transaction.rollback();
     }
 

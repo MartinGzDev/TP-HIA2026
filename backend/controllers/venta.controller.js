@@ -1,204 +1,100 @@
+const { Op, fn, col } = require('sequelize');
+const sequelize = require('../config/database');
 const Venta = require('../models/Venta');
-const Cliente = require('../models/cliente.model'); // Necesario para actualizar puntos del cliente
-const Pedido = require('../models/pedido');   // Necesario para verificar el pedido
-const { fn, col } = require('sequelize');
+const Cliente = require('../models/cliente.model');
+const Pedido = require('../models/pedido');
+const Usuario = require('../models/usuario');
 
-// --- Operaciones CRUD Básicas y Específicas de Venta ---
+const includePedido = { model: Pedido, as: 'pedido', required: false };
+const includeCliente = { model: Cliente, as: 'cliente', required: false, include: [{ model: Usuario, as: 'usuario', attributes: ['id', 'nombre', 'apellido', 'email', 'telefono'] }] };
 
 exports.crearVenta = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { pedidoId, metodoPago } = req.body;
-
-    // 1. Verificar que el pedido exista y no haya sido ya procesado en una venta
-    const pedido = await Pedido.findById(pedidoId);
-    if (!pedido) {
-      return res.status(404).json({ mensaje: 'Pedido no encontrado.' });
-    }
-
-    const ventaExistente = await Venta.findOne({ pedidoId: pedido._id });
-    if (ventaExistente) {
-      return res.status(400).json({ mensaje: 'Este pedido ya ha sido asociado a una venta.' });
-    }
-
-    // 2. Crear la venta con los datos del pedido y el método de pago
-    const nuevaVenta = new Venta({
-      pedidoId: pedido._id,
-      clienteId: pedido.clienteId, // Asume que el pedido tiene un clienteId
-      montoTotal: pedido.total, // Asume que el pedido tiene un campo 'total'
-      metodoPago: metodoPago,
-      // fechaVenta se establecerá por defecto
-
-    });
-
-    await nuevaVenta.save();
-
-    // Opcional: Actualizar el estado del pedido a 'completado' o 'pagado'
-
-    await pedido.save();
-
-    res.status(201).json({
-      mensaje: 'Venta creada exitosamente',
-      venta: nuevaVenta
-    });
+    const pedido = await Pedido.findByPk(pedidoId, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!pedido) { await transaction.rollback(); return res.status(404).json({ mensaje: 'Pedido no encontrado.' }); }
+    const existente = await Venta.findOne({ where: { pedidoId: pedido.id }, transaction });
+    if (existente) { await transaction.rollback(); return res.status(400).json({ mensaje: 'Este pedido ya ha sido asociado a una venta.' }); }
+    const venta = await Venta.create({ pedidoId: pedido.id, clienteId: pedido.clienteId, montoTotal: pedido.total, metodoPago }, { transaction });
+    await transaction.commit();
+    return res.status(201).json({ mensaje: 'Venta creada exitosamente', venta });
   } catch (error) {
-    res.status(500).json({
-      mensaje: 'Error al crear la venta',
-      error: error.message
-    });
+    if (!transaction.finished) await transaction.rollback();
+    console.error('Error al crear venta:', error);
+    return res.status(500).json({ mensaje: 'Error al crear la venta', error: error.message });
   }
 };
 
 exports.obtenerVentas = async (req, res) => {
   try {
-    const ventas = await Venta.find({})
-      .populate('pedidoId')  // Trae todos los datos del pedido
-      .populate('clienteId', 'nombre apellido email'); // Trae algunos datos del cliente
-    res.status(200).json(ventas);
-  } catch (error) {
-    res.status(500).json({
-      mensaje: 'Error al obtener ventas',
-      error: error.message
-    });
-  }
+    const ventas = await Venta.findAll({ include: [includePedido, includeCliente], order: [['fechaVenta', 'DESC']] });
+    return res.status(200).json(ventas);
+  } catch (error) { return res.status(500).json({ mensaje: 'Error al obtener ventas', error: error.message }); }
 };
 
 exports.obtenerVentaPorId = async (req, res) => {
   try {
-    const venta = await Venta.findById(req.params.id)
-      .populate('pedidoId')
-      .populate('clienteId', 'nombre apellido email');
-    if (!venta) {
-      return res.status(404).json({ mensaje: 'Venta no encontrada' });
-    }
-    res.status(200).json(venta);
-  } catch (error) {
-    res.status(500).json({
-      mensaje: 'Error al obtener venta',
-      error: error.message
-    });
-  }
+    const venta = await Venta.findByPk(req.params.id, { include: [includePedido, includeCliente] });
+    if (!venta) return res.status(404).json({ mensaje: 'Venta no encontrada' });
+    return res.status(200).json(venta);
+  } catch (error) { return res.status(400).json({ mensaje: 'ID de venta inválido o error al obtener venta', error: error.message }); }
 };
 
 exports.ventasPorCliente = async (req, res) => {
   try {
-    const { clienteId } = req.params;
-    const ventas = await Venta.find({ clienteId: clienteId })
-      .populate('pedidoId')
-      .sort({ fechaVenta: -1 }); // Ordenar por fecha descendente
-    res.status(200).json(ventas);
-  } catch (error) {
-    res.status(500).json({
-      mensaje: 'Error al obtener ventas por cliente',
-      error: error.message
-    });
-  }
+    const ventas = await Venta.findAll({ where: { clienteId: req.params.clienteId }, include: [includePedido], order: [['fechaVenta', 'DESC']] });
+    return res.status(200).json(ventas);
+  } catch (error) { return res.status(500).json({ mensaje: 'Error al obtener ventas por cliente', error: error.message }); }
 };
 
 exports.ventasPorFecha = async (req, res) => {
-  // Ejemplo: /api/ventas/por-fecha?desde=2024-01-01&hasta=2024-12-31
   try {
     const { desde, hasta } = req.query;
-    const query = {};
-    if (desde) query.fechaVenta = { ...query.fechaVenta, $gte: new Date(desde) };
-    if (hasta) query.fechaVenta = { ...query.fechaVenta, $lte: new Date(hasta) };
-
-    const ventas = await Venta.find(query)
-      .populate('clienteId', 'nombre apellido')
-      .sort({ fechaVenta: 1 }); // Ordenar por fecha ascendente
-    res.status(200).json(ventas);
-  } catch (error) {
-    res.status(500).json({
-      mensaje: 'Error al obtener ventas por rango de fechas',
-      error: error.message
-    });
-  }
+    const fechaVenta = {};
+    if (desde) fechaVenta[Op.gte] = new Date(desde);
+    if (hasta) fechaVenta[Op.lte] = new Date(hasta);
+    const where = Object.keys(fechaVenta).length ? { fechaVenta } : {};
+    const ventas = await Venta.findAll({ where, include: [includeCliente], order: [['fechaVenta', 'ASC']] });
+    return res.status(200).json(ventas);
+  } catch (error) { return res.status(500).json({ mensaje: 'Error al obtener ventas por rango de fechas', error: error.message }); }
 };
 
 exports.totalVentas = async (req, res) => {
   try {
-    const total = await Venta.findOne({
-      attributes: [[fn('COALESCE', fn('SUM', col('montoTotal')), 0), 'totalGeneral']],
-      raw: true
-    });
-    res.status(200).json({
-      mensaje: 'Total de ventas calculado',
-      totalGeneral: Number(total?.totalGeneral || 0)
-    });
-  } catch (error) {
-    res.status(500).json({
-      mensaje: 'Error al calcular el total de ventas',
-      error: error.message
-    });
-  }
+    const total = await Venta.sum('montoTotal');
+    return res.status(200).json({ mensaje: 'Total de ventas calculado', totalGeneral: Number(total || 0) });
+  } catch (error) { return res.status(500).json({ mensaje: 'Error al calcular el total de ventas', error: error.message }); }
 };
 
 exports.procesarPago = async (req, res) => {
-  // Aquí iría la integración con una pasarela de pago real (Stripe, Mercado Pago, etc.)
-  // Por ahora, solo simula el cambio de estado.
+  const transaction = await sequelize.transaction();
   try {
-    const { id } = req.params;
-    const venta = await Venta.findById(id);
-
-    if (!venta) {
-      return res.status(404).json({ mensaje: 'Venta no encontrada.' });
-    }
-    if (venta.estadoPago === 'completado') {
-      return res.status(400).json({ mensaje: 'El pago de esta venta ya ha sido procesado.' });
-    }
-
-    // Simulación de procesamiento de pago exitoso
-    venta.estadoPago = 'completado';
-    await venta.save();
-
-    // Opcional: Otorgar puntos de fidelidad al cliente
-    const cliente = await Cliente.findById(venta.clienteId);
-    if (cliente) {
-      cliente.puntos += Math.floor(venta.montoTotal / 10); // Ejemplo: 1 punto por cada $10 de compra
-      await cliente.save();
-    }
-
-    res.status(200).json({
-      mensaje: 'Pago procesado y venta confirmada.',
-      venta: venta,
-    });
-
+    const venta = await Venta.findByPk(req.params.id, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!venta) { await transaction.rollback(); return res.status(404).json({ mensaje: 'Venta no encontrada.' }); }
+    if (venta.estadoPago === 'completado') { await transaction.rollback(); return res.status(400).json({ mensaje: 'El pago de esta venta ya ha sido procesado.' }); }
+    await venta.update({ estadoPago: 'completado' }, { transaction });
+    const cliente = await Cliente.findByPk(venta.clienteId, { transaction, lock: transaction.LOCK.UPDATE });
+    if (cliente) await cliente.increment('puntos', { by: Math.floor(Number(venta.montoTotal) / 10), transaction });
+    await transaction.commit();
+    return res.status(200).json({ mensaje: 'Pago procesado y venta confirmada.', venta });
   } catch (error) {
-    res.status(500).json({
-      mensaje: 'Error al procesar el pago',
-      error: error.message
-    });
+    if (!transaction.finished) await transaction.rollback();
+    return res.status(500).json({ mensaje: 'Error al procesar el pago', error: error.message });
   }
 };
 
 exports.generarFactura = async (req, res) => {
   try {
-    const { id } = req.params;
-    const venta = await Venta.findById(id);
-
-    if (!venta) {
-      return res.status(404).json({ mensaje: 'Venta no encontrada.' });
+    const venta = await Venta.findByPk(req.params.id);
+    if (!venta) return res.status(404).json({ mensaje: 'Venta no encontrada.' });
+    if (venta.estadoPago !== 'completado') return res.status(400).json({ mensaje: 'El pago debe estar completado para generar factura.' });
+    if (!venta.numeroFactura) {
+      const prefix = 'INV';
+      const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const randomPart = Math.random().toString(36).substring(2, 8).toUpperCase();
+      await venta.update({ numeroFactura: `${prefix}-${datePart}-${randomPart}` });
     }
-    if (venta.estadoPago !== 'completado') {
-      return res.status(400).json({ mensaje: 'El pago debe estar completado para generar factura.' });
-    }
-
-    // Llama al método del esquema para generar o recuperar el número de factura
-    const numeroFactura = await venta.generarNumeroFactura();
-
-    // Aquí podrías generar un PDF de factura y enviarlo o guardarlo
-    res.status(200).json({
-      mensaje: 'Factura generada exitosamente.',
-      numeroFactura: numeroFactura,
-      venta: venta
-    });
-  } catch (error) {
-    res.status(500).json({
-      mensaje: 'Error al generar la factura',
-      error: error.message
-    });
-  }
+    return res.status(200).json({ mensaje: 'Factura generada exitosamente.', numeroFactura: venta.numeroFactura, venta });
+  } catch (error) { return res.status(500).json({ mensaje: 'Error al generar la factura', error: error.message }); }
 };
-
-// `confirmarPago()` es redundante con `procesarPago()` si el procesamiento es la confirmación.
-// Si se refiere a un proceso de doble confirmación, se podría implementar una función separada.
-// Por simplicidad, `procesarPago` ya setea el estado a 'completado'.

@@ -1,714 +1,231 @@
-const Pedido = require('../models/pedido'); // Asumo 'pedido.model.js' como convención
-const Cliente = require('../models/cliente.model'); // Asumo 'cliente.model.js'
-const Producto = require('../models/producto'); // Asumo 'producto.model.js'
-const Repartidor = require('../models/Repartidor'); // Asumo 'repartidor.model.js'
-const emailService = require('../services/emailService'); // Para notificaciones por email
-const Usuario = require('../models/usuario'); // Necesario para obtener el clienteId asociado al usuario autenticado
+const { Op } = require('sequelize');
+const { Pedido, Cliente, Producto, Repartidor, Usuario } = require('../models');
+const emailService = require('../services/emailService');
 
-// --- Operaciones CRUD Básicas y Específicas de Pedido ---
+const idUsuario = (req) => req.usuario?.id ?? req.usuario?._id;
+const rolUsuario = (req) => req.usuario?.rol;
+const incluirCliente = { model: Cliente, as: 'cliente', include: [{ model: Usuario, as: 'usuario', attributes: ['id', 'nombre', 'apellido', 'email', 'telefono'] }] };
+const incluirRepartidor = { model: Repartidor, as: 'repartidor', include: [{ model: Usuario, as: 'usuario', attributes: ['id', 'nombre', 'apellido', 'telefono'] }] };
+const incluirPersonas = [incluirCliente, incluirRepartidor];
+const error500 = (res, mensaje, error) => res.status(500).json({ mensaje, error: error.message });
+
+async function clienteDelUsuario(usuarioId) {
+  const usuario = await Usuario.findByPk(usuarioId, { attributes: ['id', 'clienteId'] });
+  return usuario?.clienteId ?? null;
+}
+async function repartidorDelUsuario(usuarioId) {
+  return Repartidor.findOne({ where: { usuarioId } });
+}
+function aplicarFiltrosFecha(where, desde, hasta) {
+  if (desde || hasta) {
+    where.fechaPedido = {};
+    if (desde) where.fechaPedido[Op.gte] = new Date(desde);
+    if (hasta) where.fechaPedido[Op.lte] = new Date(hasta);
+  }
+}
 
 exports.crearPedido = async (req, res) => {
-  // Solo los clientes pueden crear pedidos.
-  // req.usuario.rol es adjuntado por el middleware de autenticación/autorización.
-  if (req.usuario.rol !== 'cliente') {
-    return res.status(403).json({ mensaje: 'Acceso denegado. Solo los clientes pueden crear pedidos.' });
-  }
-
+  if (rolUsuario(req) !== 'cliente') return res.status(403).json({ mensaje: 'Acceso denegado. Solo los clientes pueden crear pedidos.' });
+  const transaction = await Pedido.sequelize.transaction();
   try {
     const { detalleProductos, direccionEntrega, metodoPago, descuentos = 0, costoEnvio = 0, observaciones } = req.body;
-
-    // El clienteId para el pedido debe ser el del usuario autenticado (si es un cliente)
-    // Buscamos el ID del registro de Cliente asociado al ID de Usuario autenticado.
-    const usuarioAutenticado = await Usuario.findById(req.usuario._id);
-    if (!usuarioAutenticado || !usuarioAutenticado.clienteId) {
-      return res.status(403).json({ mensaje: 'No se pudo asociar un cliente válido para crear el pedido.' });
+    if (!Array.isArray(detalleProductos) || !detalleProductos.length) {
+      await transaction.rollback();
+      return res.status(400).json({ mensaje: 'Debe agregar al menos un producto al pedido.' });
     }
-    const clienteIdAutenticado = usuarioAutenticado.clienteId;
-
-    // 1. Verificar existencia del cliente (usando el ID del usuario autenticado)
-    const cliente = await Cliente.findById(clienteIdAutenticado);
-    if (!cliente) {
-      return res.status(404).json({ mensaje: 'Cliente no encontrado.' });
-    }
-
-    const productosParaActualizarStock = [];
-    const detallesParaPedido = []; // Nuevo array para construir los detalles con subtotales calculados
-
-    // 2. Verificar disponibilidad de productos y preparar detalleProductos con subtotales
+    const clienteId = await clienteDelUsuario(idUsuario(req));
+    if (!clienteId) { await transaction.rollback(); return res.status(403).json({ mensaje: 'No se pudo asociar un cliente válido para crear el pedido.' }); }
+    const cliente = await Cliente.findByPk(clienteId, { transaction, include: [{ model: Usuario, as: 'usuario', attributes: ['id', 'nombre', 'email'] }] });
+    if (!cliente) { await transaction.rollback(); return res.status(404).json({ mensaje: 'Cliente no encontrado.' }); }
+    const detalle = [];
     for (const item of detalleProductos) {
-      const producto = await Producto.findById(item.productoId);
-      if (!producto) {
-        return res.status(404).json({ mensaje: `Producto con ID ${item.productoId} no encontrado.` });
-      }
-      if (producto.stock < item.cantidad) {
-        return res.status(400).json({ mensaje: `Stock insuficiente para el producto: ${producto.nombre}. Disponible: ${producto.stock}, Solicitado: ${item.cantidad}` });
-      }
-
-      // Construye el objeto de detalle del producto, incluyendo el subtotal individual
-      const detalleItem = {
-        productoId: producto._id,
-        nombreProducto: producto.nombre, // Captura el nombre del producto al momento del pedido
-        cantidad: item.cantidad,
-        precioUnitario: producto.precio, // Captura el precio unitario del producto al momento del pedido
-        // El 'subtotal' para cada ítem será calculado automáticamente por el hook pre-save del modelo Pedido
-        // No es necesario calcularlo aquí manualmente y pasarlo, ya que el hook lo hará.
-      };
-      detallesParaPedido.push(detalleItem);
-
-      productosParaActualizarStock.push({
-        id: producto._id,
-        stockReducir: item.cantidad
-      });
+      const cantidad = Number(item.cantidad);
+      if (!Number.isInteger(cantidad) || cantidad <= 0) throw Object.assign(new Error('La cantidad de cada producto debe ser un entero mayor a cero.'), { status: 400 });
+      const producto = await Producto.findByPk(item.productoId, { transaction, lock: transaction.LOCK.UPDATE });
+      if (!producto) throw Object.assign(new Error(`Producto con ID ${item.productoId} no encontrado.`), { status: 404 });
+      if (producto.stock < cantidad) throw Object.assign(new Error(`Stock insuficiente para ${producto.nombre}. Disponible: ${producto.stock}, solicitado: ${cantidad}`), { status: 400 });
+      detalle.push({ productoId: producto.id, nombreProducto: producto.nombre, cantidad, precioUnitario: Number(producto.precio) });
     }
-
-    const nuevoPedido = new Pedido({
-      clienteId: clienteIdAutenticado, // Usar el ID del cliente autenticado
-      detalleProductos: detallesParaPedido, // Usa los detalles ya preparados
-      direccionEntrega,
-      metodoPago,
-      descuentos,
-      costoEnvio,
-      observaciones,
-      // 'subtotal' y 'total' se calcularán automáticamente en el pre-save hook del modelo Pedido
-    });
-
-    await nuevoPedido.save(); // Esto activará el pre-save hook para calcular todos los subtotales y el total
-
-    // 3. Reducir stock de productos después de guardar el pedido
-    for (const p of productosParaActualizarStock) {
-      await Producto.findByIdAndUpdate(p.id, { $inc: { stock: -p.stockReducir } });
-    }
-
-    // 4. (Opcional) Enviar email de confirmación
-    const clienteEmail = cliente.email;
-    if (clienteEmail && emailService && typeof emailService.enviarEmail === 'function') {
+    const pedido = await Pedido.create({ clienteId, detalleProductos: detalle, direccionEntrega, metodoPago, descuentos, costoEnvio, observaciones }, { transaction });
+    for (const item of detalle) await Producto.decrement('stock', { by: item.cantidad, where: { id: item.productoId }, transaction });
+    await transaction.commit();
+    if (cliente.usuario?.email && emailService?.enviarEmail) {
       try {
-        const emailSubject = `Confirmación de tu pedido #${nuevoPedido._id} - SUBTE`;
-        const emailText = `Hola ${cliente.nombre},\n\nTu pedido ha sido recibido. Total: $${nuevoPedido.total}. Estado: ${nuevoPedido.estado}.\n\nGracias por tu compra!`;
-        const emailHtml = `<p>Hola ${cliente.nombre},</p><p>Tu pedido <strong>#${nuevoPedido._id}</strong> ha sido recibido con éxito. El monto total es de <strong>$${nuevoPedido.total}</strong>.</p><p>Estado actual: <strong>${nuevoPedido.estado}</strong>.</p><p>Gracias por tu compra!</p>`;
-        const emailEnviado = await emailService.enviarEmail(clienteEmail, emailSubject, emailText, emailHtml);
-        if (emailEnviado) {
-          console.log('Email de confirmación enviado exitosamente');
-        } else {
-          console.warn('No se pudo enviar el email de confirmación');
-        }
-      } catch (emailError) {
-        console.warn('Error al enviar email de confirmación:', emailError.message);
-        // No fallamos el pedido por un error de email
-      }
-    } else {
-      console.warn('Servicio de email no disponible o no configurado para enviar confirmación de pedido.');
+        await emailService.enviarEmail(cliente.usuario.email, `Confirmación de tu pedido #${pedido.id} - SUBTE`, `Hola ${cliente.usuario.nombre},\n\nTu pedido fue recibido. Total: $${pedido.total}. Estado: ${pedido.estado}.`, `<p>Hola ${cliente.usuario.nombre},</p><p>Tu pedido <strong>#${pedido.id}</strong> fue recibido. Total: <strong>$${pedido.total}</strong>.</p>`);
+      } catch (e) { console.warn('No se pudo enviar email de confirmación:', e.message); }
     }
-
-    res.status(201).json({
-      mensaje: 'Pedido creado exitosamente',
-      pedido: nuevoPedido
-    });
+    return res.status(201).json({ mensaje: 'Pedido creado exitosamente', pedido });
   } catch (error) {
-    console.error('Error al crear el pedido:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al crear el pedido',
-      error: error.message
-    });
+    if (!transaction.finished) await transaction.rollback();
+    console.error('Error al crear pedido:', error);
+    return res.status(error.status || 500).json({ mensaje: error.status ? error.message : 'Error interno del servidor al crear el pedido', error: error.message });
   }
 };
 
 exports.listarPedidos = async (req, res) => {
-    try {
-        console.log('=== INICIO listarPedidos ===');
-        console.log('Usuario:', req.usuario?.rol, req.usuario?._id);
-        console.log('Query params:', req.query);
-        
-        let query = {}; // Objeto base para los filtros de la consulta a la BD
-
-        // Lógica de autorización y filtrado inicial por rol
-        const userRole = req.usuario.rol;
-        const userId = req.usuario._id; // ID del usuario autenticado
-
-        if (userRole === 'cliente') {
-            const usuarioAutenticado = await Usuario.findById(userId);
-            if (!usuarioAutenticado || !usuarioAutenticado.clienteId) {
-                return res.status(403).json({ mensaje: 'No se pudo asociar un cliente válido para ver pedidos.' });
-            }
-            query.clienteId = usuarioAutenticado.clienteId;
-        } else if (userRole === 'repartidor') {
-            const repartidorAsociado = await Repartidor.findOne({ usuarioId: userId });
-            if (!repartidorAsociado) {
-                return res.status(403).json({ mensaje: 'No se pudo asociar un repartidor válido para ver pedidos.' });
-            }
-            // Los repartidores pueden ver pedidos asignados a ellos O pedidos disponibles para tomar
-            // (estados confirmado, en_preparacion, en_envio sin repartidor asignado)
-            query.$or = [
-                { repartidorId: repartidorAsociado._id },
-                { estado: { $in: ['confirmado', 'en_preparacion', 'en_envio'] }, repartidorId: null }
-            ];
-        } else if (!['admin', 'supervisor_cocina', 'supervisor_ventas'].includes(userRole)) {
-            // Otros roles no especificados no tienen acceso directo a listar todos los pedidos
-            return res.status(403).json({ mensaje: 'Acceso denegado. No tiene permisos para listar pedidos.' });
-        }
-
-        // --- AÑADIMOS LA LÓGICA DE FILTRADO POR QUERY PARAMS ---
-        // Esto permite que roles con acceso general (admin, supervisores) o el mismo repartidor
-        // puedan solicitar filtros adicionales.
-        // Si el rol ya impuso un filtro (clienteId o repartidorId), se combinará con los query params.
-
-        // Filtrar por repartidorId desde query param (útil para admin/supervisores o depuración)
-        // NOTA: Si el usuario es un 'repartidor', su ID de repartidor ya fue añadido a 'query.repartidorId' arriba.
-        // Este if solo aplicaría si un admin/supervisor está buscando pedidos de UN repartidor específico.
-        if (req.query.repartidorId && userRole !== 'repartidor') { // Evita sobreescribir si ya se filtró por el repartidor logueado
-            query.repartidorId = req.query.repartidorId;
-        }
-
-        // Filtrar por estados (ej. ?estados=en_envio,confirmado)
-        // El frontend enviará esto como `?estados=confirmado,en_preparacion,en_envio`
-        if (req.query.estados) {
-            console.log('Estados recibidos en backend:', req.query.estados); // Debug
-            const estadosArray = req.query.estados.split(',');
-            console.log('Estados array en backend:', estadosArray); // Debug
-            
-            // Si hay un $or (para repartidores), necesitamos combinar el filtro de estados con cada condición del $or
-            if (query.$or && Array.isArray(query.$or)) {
-                // Aplicar el filtro de estados a cada condición del $or
-                query.$or = query.$or.map(condition => {
-                    const newCondition = { ...condition };
-                    // Si la condición ya tiene un estado, lo combinamos con $in
-                    if (newCondition.estado) {
-                        // Si ya es un objeto con $in, combinamos los arrays
-                        if (newCondition.estado.$in) {
-                            newCondition.estado.$in = newCondition.estado.$in.filter(estado => estadosArray.includes(estado));
-                        } else {
-                            // Si es un estado simple, lo convertimos a $in y filtramos
-                            if (estadosArray.includes(newCondition.estado)) {
-                                newCondition.estado = { $in: [newCondition.estado] };
-                            } else {
-                                newCondition.estado = { $in: [] }; // No hay coincidencias
-                            }
-                        }
-                    } else {
-                        // Si no tiene estado, agregamos el filtro de estados
-                        newCondition.estado = { $in: estadosArray };
-                    }
-                    return newCondition;
-                });
-                // Filtrar condiciones vacías (si algún $in quedó vacío)
-                query.$or = query.$or.filter(condition => {
-                    if (condition.estado && condition.estado.$in) {
-                        return condition.estado.$in.length > 0;
-                    }
-                    return true;
-                });
-            } else {
-                // Para otros roles, simplemente aplicamos el filtro de estados
-                query.estado = { $in: estadosArray };
-            }
-            console.log('Query final en backend:', JSON.stringify(query, null, 2)); // Debug
-        }
-
-        // Paginación para evitar cargar demasiados pedidos de una vez
-        const page = parseInt(req.query.page) || 1;
-        const limit = Math.min(parseInt(req.query.limit) || 50, 200); // Límite por defecto de 50, máximo 200
-        const skip = (page - 1) * limit;
-
-        // Ordenamiento: más recientes primero
-        const sortBy = req.query.sortBy || '-fechaPedido'; // Por defecto ordena por fecha descendente
-
-        // También considera otros filtros que ya tienes en getPedidosFiltrados
-        // Por ejemplo, clienteId, fechaDesde, fechaHasta, si quieres que listarPedidos los soporte también.
-        // Para este caso específico del repartidor, solo nos interesan repartidorId y estados.
-
-        // Obtener total de pedidos que coinciden con el query (para paginación)
-        // Usar countDocuments con el mismo query para obtener el total
-        let totalPedidos;
-        try {
-            totalPedidos = await Pedido.countDocuments(query);
-        } catch (countError) {
-            console.error('Error al contar pedidos:', countError);
-            totalPedidos = 0; // Si falla el conteo, continuar con 0
-        }
-
-        // Ejecutar consulta con límites para evitar sobrecarga
-        let pedidos;
-        try {
-            pedidos = await Pedido.find(query)
-            .populate({ // Populamos clienteId y su usuarioId anidado
-                path: 'clienteId',
-                select: 'usuarioId', // Solo selecciona el usuarioId del cliente
-                populate: {
-                    path: 'usuarioId', // Luego populas el usuarioId dentro del cliente
-                    select: 'nombre apellido email' // Selecciona los campos necesarios del usuario
-                }
-            })
-                .populate('repartidorId', 'nombre apellido telefono') // Añade 'apellido' y 'telefono' aquí
-                .sort(sortBy) // Ordenar por fecha descendente (más recientes primero)
-                .limit(limit) // Limitar resultados
-                .skip(skip) // Saltar resultados para paginación
-                .lean(); // Usar lean() para mejorar rendimiento con grandes volúmenes
-
-        console.log('Pedidos encontrados en backend:', pedidos.length); // Debug
-            console.log('Total de pedidos (sin límite):', totalPedidos); // Debug
-            console.log('Página:', page, 'Límite:', limit); // Debug
-        } catch (queryError) {
-            console.error('Error al ejecutar consulta de pedidos:', queryError);
-            throw queryError; // Re-lanzar para que lo capture el catch general
-        }
-
-        // Retornar pedidos con información de paginación
-        res.status(200).json({
-            pedidos: pedidos,
-            paginacion: {
-                total: totalPedidos,
-                pagina: page,
-                limite: limit,
-                totalPaginas: Math.ceil(totalPedidos / limit),
-                tieneSiguiente: page < Math.ceil(totalPedidos / limit),
-                tieneAnterior: page > 1
-            }
-        });
-    } catch (error) {
-        console.error('=== ERROR al listar pedidos ===');
-        console.error('Error completo:', error);
-        console.error('Stack:', error.stack);
-        
-        // Asegurarse de que la respuesta no se haya enviado ya
-        if (!res.headersSent) {
-        res.status(500).json({
-            mensaje: 'Error interno del servidor al listar pedidos',
-                error: error.message || 'Error desconocido'
-        });
-        } else {
-            console.error('Error: Headers ya enviados, no se puede responder');
-        }
+  try {
+    const rol = rolUsuario(req), usuarioId = idUsuario(req), where = {};
+    if (rol === 'cliente') {
+      const clienteId = await clienteDelUsuario(usuarioId);
+      if (!clienteId) return res.status(403).json({ mensaje: 'No se pudo asociar un cliente válido para ver pedidos.' });
+      where.clienteId = clienteId;
+    } else if (rol === 'repartidor') {
+      const repartidor = await repartidorDelUsuario(usuarioId);
+      if (!repartidor) return res.status(403).json({ mensaje: 'No se pudo asociar un repartidor válido para ver pedidos.' });
+      where[Op.or] = [{ repartidorId: repartidor.id }, { estado: { [Op.in]: ['confirmado', 'en_preparacion', 'en_envio'] }, repartidorId: null }];
+    } else if (!['admin', 'supervisor_cocina', 'supervisor_ventas'].includes(rol)) return res.status(403).json({ mensaje: 'Acceso denegado. No tiene permisos para listar pedidos.' });
+    if (req.query.repartidorId && rol !== 'repartidor') where.repartidorId = req.query.repartidorId;
+    if (req.query.estados) {
+      const estados = req.query.estados.split(',').filter(Boolean);
+      if (where[Op.or]) where[Op.or] = where[Op.or].map(c => ({ ...c, estado: c.estado ? { [Op.in]: (c.estado[Op.in] || []).filter(e => estados.includes(e)) } : { [Op.in]: estados } })).filter(c => !c.estado[Op.in] || c.estado[Op.in].length);
+      else where.estado = { [Op.in]: estados };
     }
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit, 10) || 50), 200);
+    const orderField = String(req.query.sortBy || '-fechaPedido').replace(/^[-+]/, '');
+    const direction = String(req.query.sortBy || '-fechaPedido').startsWith('-') ? 'DESC' : 'ASC';
+    const result = await Pedido.findAndCountAll({ where, include: incluirPersonas, distinct: true, order: [[orderField, direction]], limit, offset: (page - 1) * limit });
+    return res.status(200).json({ pedidos: result.rows, paginacion: { total: result.count, pagina: page, limite: limit, totalPaginas: Math.ceil(result.count / limit), tieneSiguiente: page < Math.ceil(result.count / limit), tieneAnterior: page > 1 } });
+  } catch (error) { console.error('Error al listar pedidos:', error); return error500(res, 'Error interno del servidor al listar pedidos', error); }
 };
 
 exports.obtenerPedidoPorId = async (req, res) => {
   try {
-    const { id } = req.params;
-    const userRole = req.usuario.rol;
-    const userId = req.usuario._id;
-
-    const pedido = await Pedido.findById(id)
-      .populate('clienteId', 'nombre apellido email telefono')
-      .populate('repartidorId', 'nombre apellido telefono');
-
-    if (!pedido) {
-      return res.status(404).json({ mensaje: 'Pedido no encontrado' });
-    }
-
-    // Lógica de autorización para obtener un pedido por ID
-    if (userRole === 'cliente') {
-      const usuarioAutenticado = await Usuario.findById(userId);
-      if (!usuarioAutenticado || !usuarioAutenticado.clienteId || pedido.clienteId.toString() !== usuarioAutenticado.clienteId.toString()) {
-        return res.status(403).json({ mensaje: 'Acceso denegado. Solo puede ver sus propios pedidos.' });
-      }
-    } else if (userRole === 'repartidor') {
-      const repartidorAsociado = await Repartidor.findOne({ usuarioId: userId });
-      if (!repartidorAsociado || (pedido.repartidorId && pedido.repartidorId.toString() !== repartidorAsociado._id.toString())) {
-        return res.status(403).json({ mensaje: 'Acceso denegado. Solo puede ver los pedidos asignados a usted.' });
-      }
-      // Si el pedido no tiene repartidor asignado, un repartidor no debería verlo
-      if (!pedido.repartidorId) {
-        return res.status(403).json({ mensaje: 'Acceso denegado. Este pedido no está asignado a usted.' });
-      }
-    } else if (!['admin', 'supervisor_cocina', 'supervisor_ventas'].includes(userRole)) {
-      return res.status(403).json({ mensaje: 'Acceso denegado. No tiene permisos para ver este pedido.' });
-    }
-
-    res.status(200).json(pedido);
-  } catch (error) {
-    console.error('Error al obtener pedido por ID:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al obtener pedido',
-      error: error.message
-    });
-  }
+    const pedido = await Pedido.findByPk(req.params.id, { include: incluirPersonas });
+    if (!pedido) return res.status(404).json({ mensaje: 'Pedido no encontrado' });
+    const rol = rolUsuario(req), uid = idUsuario(req);
+    if (rol === 'cliente') {
+      const clienteId = await clienteDelUsuario(uid);
+      if (!clienteId || Number(pedido.clienteId) !== Number(clienteId)) return res.status(403).json({ mensaje: 'Acceso denegado. Solo puede ver sus propios pedidos.' });
+    } else if (rol === 'repartidor') {
+      const repartidor = await repartidorDelUsuario(uid);
+      if (!repartidor || Number(pedido.repartidorId) !== Number(repartidor.id)) return res.status(403).json({ mensaje: 'Acceso denegado. Solo puede ver los pedidos asignados a usted.' });
+    } else if (!['admin', 'supervisor_cocina', 'supervisor_ventas'].includes(rol)) return res.status(403).json({ mensaje: 'Acceso denegado. No tiene permisos para ver este pedido.' });
+    return res.status(200).json(pedido);
+  } catch (error) { return error500(res, 'Error interno del servidor al obtener pedido', error); }
 };
 
 exports.actualizarPedido = async (req, res) => {
-  // Solo Administrador, Supervisor de Ventas, o Repartidor pueden actualizar un pedido
-  // (Repartidor puede actualizar para asignarse a pedidos)
-  const allowedRoles = ['admin', 'supervisor_ventas', 'repartidor'];
-  if (!allowedRoles.includes(req.usuario.rol)) {
-    return res.status(403).json({ mensaje: 'Acceso denegado. Solo administradores, supervisores de ventas o repartidores pueden actualizar pedidos.' });
-  }
-
+  const rol = rolUsuario(req);
+  if (!['admin', 'supervisor_ventas', 'repartidor'].includes(rol)) return res.status(403).json({ mensaje: 'Acceso denegado. Solo administradores, supervisores de ventas o repartidores pueden actualizar pedidos.' });
   try {
-    const { id } = req.params;
-    const updateData = req.body;
-    const userRole = req.usuario.rol;
-    const userId = req.usuario._id;
-
-    // Lógica de autorización específica para repartidores
-    if (userRole === 'repartidor') {
-      const repartidorAsociado = await Repartidor.findOne({ usuarioId: userId });
-      if (!repartidorAsociado) {
-        return res.status(403).json({ mensaje: 'No se pudo asociar un repartidor válido.' });
-      }
-
-      // Los repartidores solo pueden actualizar pedidos que:
-      // 1. Estén asignados a ellos, O
-      // 2. No tengan repartidor asignado y estén en estado 'en_envio'
-      const pedido = await Pedido.findById(id);
-      if (!pedido) {
-        return res.status(404).json({ mensaje: 'Pedido no encontrado para actualizar' });
-      }
-
-      const puedeActualizar = 
-        (pedido.repartidorId && pedido.repartidorId.toString() === repartidorAsociado._id.toString()) ||
-        (!pedido.repartidorId && pedido.estado === 'en_envio');
-
-      if (!puedeActualizar) {
-        return res.status(403).json({ mensaje: 'Acceso denegado. No puede actualizar este pedido.' });
-      }
-
-      // Si el repartidor se está asignando al pedido, actualizar el repartidorId
-      if (!pedido.repartidorId && updateData.repartidorId) {
-        updateData.repartidorId = repartidorAsociado._id;
-      }
+    const pedido = await Pedido.findByPk(req.params.id);
+    if (!pedido) return res.status(404).json({ mensaje: 'Pedido no encontrado para actualizar' });
+    const data = { ...req.body };
+    if (rol === 'repartidor') {
+      const repartidor = await repartidorDelUsuario(idUsuario(req));
+      if (!repartidor) return res.status(403).json({ mensaje: 'No se pudo asociar un repartidor válido.' });
+      const asignado = Number(pedido.repartidorId) === Number(repartidor.id);
+      if (!asignado && !(pedido.repartidorId == null && pedido.estado === 'en_envio')) return res.status(403).json({ mensaje: 'Acceso denegado. No puede actualizar este pedido.' });
+      if (!pedido.repartidorId && data.repartidorId) data.repartidorId = repartidor.id;
+      const allowed = ['repartidorId', 'estado', 'observaciones'];
+      for (const key of Object.keys(data)) if (!allowed.includes(key)) delete data[key];
     }
-
-    const pedidoActualizado = await Pedido.findByIdAndUpdate(id, updateData, {
-      new: true, // Devuelve el documento actualizado
-      runValidators: true // Corre las validaciones definidas en el esquema
-    });
-
-    if (!pedidoActualizado) {
-      return res.status(404).json({ mensaje: 'Pedido no encontrado para actualizar' });
-    }
-    res.status(200).json({ mensaje: 'Pedido actualizado exitosamente', pedido: pedidoActualizado });
-  } catch (error) {
-    console.error('Error al actualizar el pedido:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al actualizar el pedido',
-      error: error.message
-    });
-  }
+    await pedido.update(data);
+    return res.status(200).json({ mensaje: 'Pedido actualizado exitosamente', pedido });
+  } catch (error) { return error500(res, 'Error interno del servidor al actualizar el pedido', error); }
 };
 
 exports.eliminarPedido = async (req, res) => {
-  // Solo el Administrador puede eliminar pedidos
-  if (req.usuario.rol !== 'admin') {
-    return res.status(403).json({ mensaje: 'Acceso denegado. Solo administradores pueden eliminar pedidos.' });
-  }
-
+  if (rolUsuario(req) !== 'admin') return res.status(403).json({ mensaje: 'Acceso denegado. Solo administradores pueden eliminar pedidos.' });
+  const transaction = await Pedido.sequelize.transaction();
   try {
-    const pedidoEliminado = await Pedido.findByIdAndDelete(req.params.id);
-    if (!pedidoEliminado) {
-      return res.status(404).json({ mensaje: 'Pedido no encontrado para eliminar' });
-    }
-
-    // Devolver el stock de los productos al ser eliminado el pedido
-    for (const item of pedidoEliminado.detalleProductos) {
-      await Producto.findByIdAndUpdate(item.productoId, { $inc: { stock: item.cantidad } });
-    }
-
-    res.status(200).json({ mensaje: 'Pedido eliminado exitosamente. Stock de productos reestablecido.' });
-  } catch (error) {
-    console.error('Error al eliminar el pedido:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al eliminar el pedido',
-      error: error.message
-    });
-  }
+    const pedido = await Pedido.findByPk(req.params.id, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!pedido) { await transaction.rollback(); return res.status(404).json({ mensaje: 'Pedido no encontrado para eliminar' }); }
+    for (const item of pedido.detalleProductos || []) await Producto.increment('stock', { by: Number(item.cantidad), where: { id: item.productoId }, transaction });
+    await pedido.destroy({ transaction });
+    await transaction.commit();
+    return res.status(200).json({ mensaje: 'Pedido eliminado exitosamente. Stock de productos restablecido.' });
+  } catch (error) { if (!transaction.finished) await transaction.rollback(); return error500(res, 'Error interno del servidor al eliminar el pedido', error); }
 };
-
-// --- Operaciones de Filtrado y Búsqueda ---
 
 exports.getPedidosEstado = async (req, res) => {
   try {
-    const { estado } = req.params;
-    let query = { estado: estado };
-    const userRole = req.usuario.rol;
-    const userId = req.usuario._id;
-
-    // Lógica de autorización para ver pedidos por estado
-    if (userRole === 'cliente') {
-      const usuarioAutenticado = await Usuario.findById(userId);
-      if (!usuarioAutenticado || !usuarioAutenticado.clienteId) {
-        return res.status(403).json({ mensaje: 'No se pudo asociar un cliente válido para ver pedidos por estado.' });
-      }
-      query.clienteId = usuarioAutenticado.clienteId;
-    } else if (userRole === 'repartidor') {
-      const repartidorAsociado = await Repartidor.findOne({ usuarioId: userId });
-      if (!repartidorAsociado) {
-        return res.status(403).json({ mensaje: 'No se pudo asociar un repartidor válido para ver pedidos por estado.' });
-      }
-      query.repartidorId = repartidorAsociado._id;
-    } else if (!['admin', 'supervisor_cocina', 'supervisor_ventas'].includes(userRole)) {
-      return res.status(403).json({ mensaje: 'Acceso denegado. No tiene permisos para listar pedidos por estado.' });
-    }
-
-    const pedidos = await Pedido.find(query)
-      .populate('clienteId', 'nombre apellido email')
-      .populate('repartidorId', 'nombre');
-    res.status(200).json(pedidos);
-  } catch (error) {
-    console.error('Error al obtener pedidos por estado:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al obtener pedidos por estado',
-      error: error.message
-    });
-  }
+    const where = { estado: req.params.estado }, rol = rolUsuario(req);
+    if (rol === 'cliente') { const cid = await clienteDelUsuario(idUsuario(req)); if (!cid) return res.status(403).json({ mensaje: 'No se pudo asociar un cliente válido.' }); where.clienteId = cid; }
+    else if (rol === 'repartidor') { const r = await repartidorDelUsuario(idUsuario(req)); if (!r) return res.status(403).json({ mensaje: 'No se pudo asociar un repartidor válido.' }); where.repartidorId = r.id; }
+    else if (!['admin', 'supervisor_cocina', 'supervisor_ventas'].includes(rol)) return res.status(403).json({ mensaje: 'Acceso denegado.' });
+    return res.json(await Pedido.findAll({ where, include: incluirPersonas, order: [['fechaPedido', 'DESC']] }));
+  } catch (error) { return error500(res, 'Error interno al obtener pedidos por estado', error); }
 };
 
 exports.getPedidosCliente = async (req, res) => {
   try {
-    const { clienteId } = req.params;
-    const userRole = req.usuario.rol;
-    const userId = req.usuario._id;
-    let query = { clienteId: clienteId };
-
-    // Lógica de autorización
-    if (userRole === 'cliente') {
-      const usuarioAutenticado = await Usuario.findById(userId);
-      if (!usuarioAutenticado || !usuarioAutenticado.clienteId || usuarioAutenticado.clienteId.toString() !== clienteId.toString()) {
-        return res.status(403).json({ mensaje: 'Acceso denegado. Solo puede ver sus propios pedidos.' });
-      }
-    } else if (!['admin', 'supervisor_ventas'].includes(userRole)) {
-      return res.status(403).json({ mensaje: 'Acceso denegado. No tiene permisos para ver pedidos por cliente.' });
-    }
-
-    const pedidos = await Pedido.find(query)
-      .populate('clienteId', 'nombre apellido email')
-      .populate('repartidorId', 'nombre')
-      .sort({ fechaPedido: -1 });
-    res.status(200).json(pedidos);
-  } catch (error) {
-    console.error('Error al obtener pedidos por cliente:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al obtener pedidos por cliente',
-      error: error.message
-    });
-  }
+    const { clienteId } = req.params, rol = rolUsuario(req);
+    if (rol === 'cliente') { const cid = await clienteDelUsuario(idUsuario(req)); if (!cid || Number(cid) !== Number(clienteId)) return res.status(403).json({ mensaje: 'Acceso denegado. Solo puede ver sus propios pedidos.' }); }
+    else if (!['admin', 'supervisor_ventas'].includes(rol)) return res.status(403).json({ mensaje: 'Acceso denegado. No tiene permisos para ver pedidos por cliente.' });
+    return res.json(await Pedido.findAll({ where: { clienteId }, include: incluirPersonas, order: [['fechaPedido', 'DESC']] }));
+  } catch (error) { return error500(res, 'Error interno al obtener pedidos por cliente', error); }
 };
 
 exports.getPedidosFiltrados = async (req, res) => {
   try {
-    const { estado, fechaDesde, fechaHasta, clienteId } = req.query;
-    let query = {};
-    const userRole = req.usuario.rol;
-    const userId = req.usuario._id;
-
-    // Lógica de autorización
-    if (userRole === 'cliente') {
-      const usuarioAutenticado = await Usuario.findById(userId);
-      if (!usuarioAutenticado || !usuarioAutenticado.clienteId) {
-        return res.status(403).json({ mensaje: 'No se pudo asociar un cliente válido para ver pedidos filtrados.' });
-      }
-      query.clienteId = usuarioAutenticado.clienteId;
-      // Si un cliente especifica un clienteId diferente en el query, se ignorará o se denegará
-      if (clienteId && clienteId.toString() !== usuarioAutenticado.clienteId.toString()) {
-        return res.status(403).json({ mensaje: 'Acceso denegado. No puede filtrar por el ID de otro cliente.' });
-      }
-    } else if (userRole === 'repartidor') {
-      const repartidorAsociado = await Repartidor.findOne({ usuarioId: userId });
-      if (!repartidorAsociado) {
-        return res.status(403).json({ mensaje: 'No se pudo asociar un repartidor válido para ver pedidos filtrados.' });
-      }
-      query.repartidorId = repartidorAsociado._id;
-    } else if (!['admin', 'supervisor_cocina', 'supervisor_ventas'].includes(userRole)) {
-      return res.status(403).json({ mensaje: 'Acceso denegado. No tiene permisos para filtrar pedidos.' });
-    }
-    // Si el usuario es admin, supervisor_cocina o supervisor_ventas, puede usar todos los filtros.
-    // Si clienteId se provee para admin/supervisor, se usa. Si es cliente/repartidor, ya se aplicó el filtro.
-    else { // admin, supervisor_cocina, supervisor_ventas
-      if (clienteId) query.clienteId = clienteId;
-    }
-
-
-    if (estado) query.estado = estado;
-    if (fechaDesde || fechaHasta) {
-      query.fechaPedido = {};
-      if (fechaDesde) query.fechaPedido.$gte = new Date(fechaDesde);
-      if (fechaHasta) query.fechaPedido.$lte = new Date(fechaHasta);
-    }
-
-    const pedidos = await Pedido.find(query)
-      .populate('clienteId', 'nombre apellido email')
-      .populate('repartidorId', 'nombre')
-      .sort({ fechaPedido: -1 });
-    res.status(200).json(pedidos);
-  } catch (error) {
-    console.error('Error al obtener pedidos filtrados:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al obtener pedidos filtrados',
-      error: error.message
-    });
-  }
+    const { estado, fechaDesde, fechaHasta, clienteId } = req.query, rol = rolUsuario(req), where = {};
+    if (rol === 'cliente') { const cid = await clienteDelUsuario(idUsuario(req)); if (!cid) return res.status(403).json({ mensaje: 'No se pudo asociar un cliente válido.' }); if (clienteId && Number(clienteId) !== Number(cid)) return res.status(403).json({ mensaje: 'Acceso denegado. No puede filtrar por otro cliente.' }); where.clienteId = cid; }
+    else if (rol === 'repartidor') { const r = await repartidorDelUsuario(idUsuario(req)); if (!r) return res.status(403).json({ mensaje: 'No se pudo asociar un repartidor válido.' }); where.repartidorId = r.id; }
+    else if (['admin', 'supervisor_cocina', 'supervisor_ventas'].includes(rol)) { if (clienteId) where.clienteId = clienteId; }
+    else return res.status(403).json({ mensaje: 'Acceso denegado. No tiene permisos para filtrar pedidos.' });
+    if (estado) where.estado = estado;
+    aplicarFiltrosFecha(where, fechaDesde, fechaHasta);
+    return res.json(await Pedido.findAll({ where, include: incluirPersonas, order: [['fechaPedido', 'DESC']] }));
+  } catch (error) { return error500(res, 'Error interno al obtener pedidos filtrados', error); }
 };
 
-// --- Operaciones de Negocio ---
-
 exports.cambiarEstado = async (req, res) => {
-  const { id } = req.params;
-  // Permitir ambos nombres de campo para compatibilidad
-  const nuevoEstado = req.body.nuevoEstado || req.body.estado;
-  const userRole = req.usuario.rol;
-  const userId = req.usuario._id;
-
   try {
-    const pedido = await Pedido.findById(id);
-    if (!pedido) {
-      return res.status(404).json({ mensaje: 'Pedido no encontrado' });
+    const pedido = await Pedido.findByPk(req.params.id);
+    if (!pedido) return res.status(404).json({ mensaje: 'Pedido no encontrado' });
+    const nuevoEstado = req.body.nuevoEstado || req.body.estado, rol = rolUsuario(req);
+    const estados = Pedido.rawAttributes.estado.values;
+    if (!estados.includes(nuevoEstado)) return res.status(400).json({ mensaje: `Estado '${nuevoEstado}' no válido. Estados permitidos: ${estados.join(', ')}` });
+    let autorizado = false;
+    if (rol === 'admin') autorizado = true;
+    else if (rol === 'supervisor_cocina') autorizado = (['pendiente', 'confirmado', 'en_preparacion', 'en_envio'].includes(pedido.estado) && ['pendiente', 'confirmado', 'en_preparacion', 'en_envio'].includes(nuevoEstado)) || nuevoEstado === 'cancelado';
+    else if (rol === 'repartidor') {
+      const r = await repartidorDelUsuario(idUsuario(req));
+      if (r) {
+        const asignado = Number(pedido.repartidorId) === Number(r.id);
+        autorizado = (asignado && ['en_envio', 'entregado'].includes(pedido.estado) && ['en_envio', 'entregado'].includes(nuevoEstado)) || (!pedido.repartidorId && pedido.estado === 'en_envio' && nuevoEstado === 'en_envio');
+        if (autorizado && !pedido.repartidorId) pedido.repartidorId = r.id;
+      }
     }
-
-    const estadosValidos = pedido.schema.path('estado').enumValues;
-    if (!estadosValidos.includes(nuevoEstado)) {
-      return res.status(400).json({ mensaje: `Estado '${nuevoEstado}' no es un estado válido. Estados permitidos: ${estadosValidos.join(', ')}` });
-    }
-
-    // Lógica de autorización para cambiar estado
-    let canChange = false;
-    switch (userRole) {
-      case 'admin':
-        canChange = true; // El administrador puede cambiar a cualquier estado
-        break;
-      case 'supervisor_cocina':
-        // El supervisor de cocina puede cambiar estados relacionados con la preparación
-        const estadosCocina = ['pendiente', 'confirmado', 'en_preparacion', 'en_envio'];
-        if (estadosCocina.includes(pedido.estado) && estadosCocina.includes(nuevoEstado)) {
-          canChange = true;
-        } else if (nuevoEstado === 'cancelado') { // Un supervisor de cocina puede cancelar pedidos
-          canChange = true;
-        }
-        break;
-      case 'repartidor':
-        // El repartidor puede cambiar estados de entrega
-        const estadosRepartidor = ['en_envio', 'entregado'];
-        const repartidorAsociado = await Repartidor.findOne({ usuarioId: userId });
-
-        if (repartidorAsociado) {
-          // Si el pedido está asignado al repartidor, puede cambiar estados de entrega
-          if (pedido.repartidorId && pedido.repartidorId.toString() === repartidorAsociado._id.toString()) {
-            if (estadosRepartidor.includes(pedido.estado) && estadosRepartidor.includes(nuevoEstado)) {
-              canChange = true;
-            }
-          }
-          // Si el pedido no está asignado y está en en_envio, el repartidor puede tomarlo
-          else if (!pedido.repartidorId && pedido.estado === 'en_envio' && nuevoEstado === 'en_envio') {
-            // Permitir que el repartidor se asigne al pedido
-            canChange = true;
-            pedido.repartidorId = repartidorAsociado._id;
-          }
-        }
-        break;
-      default:
-        canChange = false;
-    }
-
-    if (!canChange) {
-      return res.status(403).json({ mensaje: 'Acceso denegado. No tiene permisos para cambiar este estado.' });
-    }
-
+    if (!autorizado) return res.status(403).json({ mensaje: 'Acceso denegado. No tiene permisos para cambiar este estado.' });
     pedido.estado = nuevoEstado;
     await pedido.save();
-
-    // Opcional: Notificar al cliente sobre el cambio de estado
-    const cliente = await Cliente.findById(pedido.clienteId);
-    if (cliente && cliente.email && emailService && typeof emailService.enviarEmail === 'function') {
-      const emailSubject = `Actualización de estado de tu pedido #${pedido._id} - SUBTE`;
-      const emailText = `Hola ${cliente.nombre},\n\nEl estado de tu pedido #${pedido._id} ha sido actualizado a: ${nuevoEstado}.\n\nGracias por tu compra!`;
-      const emailHtml = `<p>Hola ${cliente.nombre},</p><p>El estado de tu pedido <strong>#${pedido._id}</strong> ha sido actualizado a: <strong>${nuevoEstado}</strong>.</p><p>Gracias por tu compra!</p>`;
-      await emailService.enviarEmail(cliente.email, emailSubject, emailText, emailHtml);
+    const cliente = await Cliente.findByPk(pedido.clienteId, { include: [{ model: Usuario, as: 'usuario', attributes: ['id', 'nombre', 'email'] }] });
+    if (cliente?.usuario?.email && emailService?.enviarEmail) {
+      try { await emailService.enviarEmail(cliente.usuario.email, `Actualización de estado de tu pedido #${pedido.id} - SUBTE`, `Hola ${cliente.usuario.nombre}, el estado de tu pedido es ${nuevoEstado}.`, `<p>Hola ${cliente.usuario.nombre}, el estado de tu pedido <strong>#${pedido.id}</strong> es <strong>${nuevoEstado}</strong>.</p>`); }
+      catch (e) { console.warn('Error enviando notificación:', e.message); }
     }
-
-    res.status(200).json({
-      mensaje: 'Estado del pedido actualizado exitosamente',
-      pedido: pedido
-    });
-  } catch (error) {
-    console.error('Error al cambiar el estado del pedido:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al cambiar el estado del pedido',
-      error: error.message
-    });
-  }
+    return res.json({ mensaje: 'Estado del pedido actualizado exitosamente', pedido });
+  } catch (error) { return error500(res, 'Error interno al cambiar el estado del pedido', error); }
 };
 
 exports.asignarRepartidor = async (req, res) => {
-  // Solo Administrador o Supervisor de Ventas pueden asignar repartidores
-  const allowedRoles = ['admin', 'supervisor_ventas'];
-  if (!allowedRoles.includes(req.usuario.rol)) {
-    return res.status(403).json({ mensaje: 'Acceso denegado. Solo administradores o supervisores de ventas pueden asignar repartidores.' });
-  }
-
+  if (!['admin', 'supervisor_ventas'].includes(rolUsuario(req))) return res.status(403).json({ mensaje: 'Acceso denegado. Solo administradores o supervisores de ventas pueden asignar repartidores.' });
   try {
-    const { id } = req.params;
     const { repartidorId, fechaEstimadaEntrega } = req.body;
-
-    const pedido = await Pedido.findById(id);
-    if (!pedido) {
-      return res.status(404).json({ mensaje: 'Pedido no encontrado' });
-    }
-
-    const repartidor = await Repartidor.findById(repartidorId);
-    if (!repartidor) {
-      return res.status(404).json({ mensaje: 'Repartidor no encontrado' });
-    }
-
-    pedido.repartidorId = repartidorId;
+    const pedido = await Pedido.findByPk(req.params.id);
+    if (!pedido) return res.status(404).json({ mensaje: 'Pedido no encontrado' });
+    const repartidor = await Repartidor.findByPk(repartidorId);
+    if (!repartidor) return res.status(404).json({ mensaje: 'Repartidor no encontrado' });
+    pedido.repartidorId = repartidor.id;
     pedido.fechaEstimadaEntrega = fechaEstimadaEntrega ? new Date(fechaEstimadaEntrega) : null;
-    pedido.estado = 'en_envio'; // Cambio de estado al asignar repartidor
+    pedido.estado = 'en_envio';
     await pedido.save();
-
-    // Opcional: Notificar al repartidor (ej. SMS) o cliente
-    // Esto podría ser a través de un servicio de notificaciones más general.
-    // if (repartidor.telefono) {
-    //   // Lógica para enviar SMS al repartidor
-    // }
-
-    res.status(200).json({
-      mensaje: 'Repartidor asignado exitosamente',
-      pedido: pedido
-    });
-  } catch (error) {
-    console.error('Error al asignar repartidor:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al asignar repartidor',
-      error: error.message
-    });
-  }
+    return res.json({ mensaje: 'Repartidor asignado exitosamente', pedido });
+  } catch (error) { return error500(res, 'Error interno al asignar repartidor', error); }
 };
 
 exports.aplicarDescuentos = async (req, res) => {
-  // Solo Administrador o Supervisor de Ventas pueden aplicar descuentos
-  const allowedRoles = ['admin', 'supervisor_ventas'];
-  if (!allowedRoles.includes(req.usuario.rol)) {
-    return res.status(403).json({ mensaje: 'Acceso denegado. Solo administradores o supervisores de ventas pueden aplicar descuentos.' });
-  }
-
+  if (!['admin', 'supervisor_ventas'].includes(rolUsuario(req))) return res.status(403).json({ mensaje: 'Acceso denegado. Solo administradores o supervisores de ventas pueden aplicar descuentos.' });
   try {
-    const { id } = req.params;
-    const { montoDescuento } = req.body;
-
-    const pedido = await Pedido.findById(id);
-    if (!pedido) {
-      return res.status(404).json({ mensaje: 'Pedido no encontrado' });
-    }
-
-    if (montoDescuento < 0 || montoDescuento > pedido.total) { // Comparar con total en lugar de subtotal
-      return res.status(400).json({ mensaje: 'Monto de descuento inválido. No puede ser negativo o exceder el total del pedido.' });
-    }
-
-    pedido.descuentos = montoDescuento;
-    // El pre-save hook del modelo recalculará el total automáticamente al guardar.
+    const pedido = await Pedido.findByPk(req.params.id);
+    if (!pedido) return res.status(404).json({ mensaje: 'Pedido no encontrado' });
+    const monto = Number(req.body.montoDescuento);
+    if (!Number.isFinite(monto) || monto < 0 || monto > Number(pedido.total)) return res.status(400).json({ mensaje: 'Monto de descuento inválido. No puede ser negativo o exceder el total del pedido.' });
+    pedido.descuentos = monto;
     await pedido.save();
-
-    res.status(200).json({
-      mensaje: 'Descuentos aplicados exitosamente',
-      pedido: pedido
-    });
-  } catch (error) {
-    console.error('Error al aplicar descuentos:', error);
-    res.status(500).json({
-      mensaje: 'Error interno del servidor al aplicar descuentos',
-      error: error.message
-    });
-  }
+    return res.json({ mensaje: 'Descuentos aplicados exitosamente', pedido });
+  } catch (error) { return error500(res, 'Error interno al aplicar descuentos', error); }
 };
-
-// Consideración sobre `generarFactura()`:
-// Como se indicó anteriormente, si la factura es un registro de `Venta`,
-// esta funcionalidad debería residir en `ventaController.js`.
-// Si un `Pedido` puede generar una proforma o una factura preliminar,
-// entonces sí tendría sentido implementarla aquí, similar a la lógica en `ventaController`.

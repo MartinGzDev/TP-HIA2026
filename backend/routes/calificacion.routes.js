@@ -7,7 +7,7 @@ const authMiddleware = require('../middleware/auth'); // Habilitar middleware de
 router.post('/', authMiddleware.autenticar, authMiddleware.autorizar(['cliente']), calificacionController.crearCalificacion);
 router.get('/', authMiddleware.autenticar, authMiddleware.autorizar(['admin', 'empleado', 'cliente']), calificacionController.obtenerCalificaciones);
 router.get('/:id', authMiddleware.autenticar, authMiddleware.autorizar(['admin', 'empleado', 'cliente']), calificacionController.obtenerCalificacionPorId);
-router.delete('/:id', authMiddleware.autenticar, authMiddleware.autorizar(['cliente']), calificacionController.eliminarCalificacion);
+router.delete('/:id', authMiddleware.autenticar, authMiddleware.autorizar(['admin', 'cliente']), calificacionController.eliminarCalificacion);
 
 // Rutas de funcionalidades específicas
 router.get('/cliente/:clienteId', authMiddleware.autenticar, authMiddleware.autorizar(['admin', 'empleado', 'cliente']), calificacionController.getCalificacionesPorCliente);

@@ -9,7 +9,6 @@ const Venta = require('./Venta');
 const Calificacion = require('./Calificacion');
 const Combo = require('./Combo');
 const Oferta = require('./Oferta');
-const { installLegacyCompat } = require('./legacy-compat');
 
 Rol.hasMany(Usuario, { foreignKey: 'rolId', as: 'usuarios' });
 Usuario.belongsTo(Rol, { foreignKey: 'rolId', as: 'rol' });
@@ -32,8 +31,5 @@ Calificacion.belongsTo(Pedido, { foreignKey: 'pedidoId', as: 'pedido' });
 Cliente.hasMany(Calificacion, { foreignKey: 'clienteId', as: 'calificaciones' });
 Calificacion.belongsTo(Cliente, { foreignKey: 'clienteId', as: 'cliente' });
 
-for (const Model of [Rol, Usuario, Cliente, Repartidor, Categoria, Producto, Pedido, Venta, Calificacion, Combo, Oferta]) {
-  installLegacyCompat(Model);
-}
 
 module.exports = { Rol, Usuario, Cliente, Repartidor, Categoria, Producto, Pedido, Venta, Calificacion, Combo, Oferta };
