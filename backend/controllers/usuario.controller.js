@@ -6,8 +6,8 @@ const bcrypt = require('bcryptjs'); // Aunque no se usa directamente aquí, se m
 
 /**
  * Función auxiliar para poblar los perfiles específicos del usuario.
- * @param {mongoose.Query} query La consulta de Mongoose.
- * @returns {mongoose.Query} La consulta con populate.
+ * @param {object} query Consulta compatible con Sequelize.
+ * @returns {object} Consulta con asociaciones cargadas.
  */
 const populateUserProfiles = (query) => {
     return query

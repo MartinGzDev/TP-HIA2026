@@ -1,18 +1,19 @@
 
-const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
-const config = require('../config');
+const sequelize = require('../config/database');
 
-const Rol = require('../models/rol');
-const Usuario = require('../models/Usuario');
-const Cliente = require('../models/cliente.model');
-const Repartidor = require('../models/Repartidor');
-const Categoria = require('../models/categoria.model');
-const Producto = require('../models/Producto');
-const Combo = require('../models/Combo');
-const Oferta = require('../models/Oferta');
-const Pedido = require('../models/pedido');
-const Calificacion = require('../models/Calificacion');
+const {
+    Rol,
+    Usuario,
+    Cliente,
+    Repartidor,
+    Categoria,
+    Producto,
+    Combo,
+    Oferta,
+    Pedido,
+    Calificacion
+} = require('../models');
 
 const roles = [
     'admin',
@@ -29,53 +30,57 @@ const integrantes = [
     { nombre: 'Gaston', apellido: 'Gregorio', username: 'ggregorio', email: 'gaston.gregorio@grupo14.com' }
 ];
 
-async function obtenerRol(nombre) {
-    return Rol.findOneAndUpdate(
-        { nombre },
-        { $setOnInsert: { nombre, estado: true } },
-        { upsert: true, new: true }
-    );
-}
+async function guardar(Model, campo, valor, datos, transaction) {
+    let registro = await Model.findOne({
+        where: { [campo]: valor },
+        transaction
+    });
 
-async function crearUsuario(datos, rolId, passwordHash) {
-    let usuario = await Usuario.findOne({ username: datos.username });
-
-    if (!usuario) {
-        usuario = await Usuario.create({
-            ...datos,
-            password: passwordHash,
-            rolId,
-            estado: true
-        });
+    if (registro) {
+        await registro.update(datos, { transaction });
+    } else {
+        registro = await Model.create(datos, { transaction });
     }
 
-    return usuario;
+    return registro;
 }
 
 async function seed() {
+    let transaction;
+
     try {
-        await mongoose.connect(config.MONGODB_URI);
-        console.log('Conectado a MongoDB');
+        await sequelize.authenticate();
+        await sequelize.sync();
+
+        transaction = await sequelize.transaction();
 
         // 1. ROLES
         const rolesDB = {};
 
         for (const nombre of roles) {
-            rolesDB[nombre] = await obtenerRol(nombre);
+            rolesDB[nombre] = await guardar(
+                Rol, 'nombre', nombre,
+                { nombre, estado: true }, transaction
+            );
         }
-
-        console.log('Roles inicializados');
 
         // 2. USUARIOS DEL GRUPO
         const passwordHash = await bcrypt.hash('hia2026', 10);
 
         for (const integrante of integrantes) {
-            await crearUsuario(integrante, rolesDB.admin._id, passwordHash);
+            await guardar(
+                Usuario, 'username', integrante.username,
+                {
+                    ...integrante,
+                    password: passwordHash,
+                    rolId: rolesDB.admin.id,
+                    estado: true
+                },
+                transaction
+            );
         }
 
-        console.log('Usuarios del grupo inicializados');
-
-        // 3. CATEGORÍAS CON IMÁGENES
+        // 3. CATEGORÍAS
         const categoriasData = [
             {
                 nombre: 'Hamburguesas',
@@ -107,22 +112,22 @@ async function seed() {
         const categoriasDB = {};
 
         for (const categoria of categoriasData) {
-            categoriasDB[categoria.nombre] = await Categoria.findOneAndUpdate(
-                { nombre: categoria.nombre },
-                { $set: categoria },
-                { upsert: true, new: true, runValidators: true }
+            categoriasDB[categoria.nombre] = await guardar(
+                Categoria,
+                'nombre',
+                categoria.nombre,
+                { ...categoria, estado: true },
+                transaction
             );
         }
 
-        console.log('Categorías inicializadas');
-
-        // 4. PRODUCTOS CON IMÁGENES
+        // 4. PRODUCTOS
         const productosData = [
             {
                 nombre: 'Hamburguesa Clásica',
                 descripcion: 'Carne, lechuga, tomate y queso',
                 precio: 6500,
-                categoriaId: categoriasDB.Hamburguesas._id,
+                categoria: 'Hamburguesas',
                 stock: 30,
                 imagen: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800'
             },
@@ -130,7 +135,7 @@ async function seed() {
                 nombre: 'Hamburguesa Doble',
                 descripcion: 'Doble carne y doble queso',
                 precio: 8500,
-                categoriaId: categoriasDB.Hamburguesas._id,
+                categoria: 'Hamburguesas',
                 stock: 25,
                 imagen: 'https://images.unsplash.com/photo-1553979459-d2229ba7433a?w=800'
             },
@@ -138,7 +143,7 @@ async function seed() {
                 nombre: 'Hamburguesa Completa',
                 descripcion: 'Carne, jamón, queso, huevo y verduras',
                 precio: 9000,
-                categoriaId: categoriasDB.Hamburguesas._id,
+                categoria: 'Hamburguesas',
                 stock: 20,
                 imagen: 'https://images.unsplash.com/photo-1571091718767-18b5b1457add?w=800'
             },
@@ -146,7 +151,7 @@ async function seed() {
                 nombre: 'Pizza Muzarella',
                 descripcion: 'Salsa, mozzarella y aceitunas',
                 precio: 10000,
-                categoriaId: categoriasDB.Pizzas._id,
+                categoria: 'Pizzas',
                 stock: 20,
                 imagen: 'https://images.unsplash.com/photo-1579751626657-72bc17010498?w=800'
             },
@@ -154,7 +159,7 @@ async function seed() {
                 nombre: 'Pizza Especial',
                 descripcion: 'Mozzarella, jamón y morrones',
                 precio: 12500,
-                categoriaId: categoriasDB.Pizzas._id,
+                categoria: 'Pizzas',
                 stock: 15,
                 imagen: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?w=800'
             },
@@ -162,7 +167,7 @@ async function seed() {
                 nombre: 'Pizza Napolitana',
                 descripcion: 'Mozzarella, tomate y ajo',
                 precio: 11500,
-                categoriaId: categoriasDB.Pizzas._id,
+                categoria: 'Pizzas',
                 stock: 15,
                 imagen: 'https://images.unsplash.com/photo-1571407970349-bc81e7e96d47?w=800'
             },
@@ -170,7 +175,7 @@ async function seed() {
                 nombre: 'Empanada de Carne',
                 descripcion: 'Empanada de carne tradicional',
                 precio: 1200,
-                categoriaId: categoriasDB.Empanadas._id,
+                categoria: 'Empanadas',
                 stock: 100,
                 imagen: 'https://images.unsplash.com/photo-1604467715878-83e57e8bc129?w=800'
             },
@@ -178,7 +183,7 @@ async function seed() {
                 nombre: 'Empanada de Pollo',
                 descripcion: 'Empanada de pollo',
                 precio: 1200,
-                categoriaId: categoriasDB.Empanadas._id,
+                categoria: 'Empanadas',
                 stock: 100,
                 imagen: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=800'
             },
@@ -186,7 +191,7 @@ async function seed() {
                 nombre: 'Empanada de Jamón y Queso',
                 descripcion: 'Empanada de jamón y queso',
                 precio: 1300,
-                categoriaId: categoriasDB.Empanadas._id,
+                categoria: 'Empanadas',
                 stock: 100,
                 imagen: 'https://images.unsplash.com/photo-1604467715878-83e57e8bc129?w=800'
             },
@@ -194,7 +199,7 @@ async function seed() {
                 nombre: 'Coca Cola 500ml',
                 descripcion: 'Gaseosa Coca Cola',
                 precio: 1800,
-                categoriaId: categoriasDB.Bebidas._id,
+                categoria: 'Bebidas',
                 stock: 50,
                 imagen: 'https://images.unsplash.com/photo-1554866585-cd94860890b7?w=800'
             },
@@ -202,7 +207,7 @@ async function seed() {
                 nombre: 'Agua Mineral 500ml',
                 descripcion: 'Agua mineral sin gas',
                 precio: 1200,
-                categoriaId: categoriasDB.Bebidas._id,
+                categoria: 'Bebidas',
                 stock: 50,
                 imagen: 'https://images.unsplash.com/photo-1523362628745-0c100150b504?w=800'
             },
@@ -210,7 +215,7 @@ async function seed() {
                 nombre: 'Sprite 500ml',
                 descripcion: 'Gaseosa Sprite',
                 precio: 1800,
-                categoriaId: categoriasDB.Bebidas._id,
+                categoria: 'Bebidas',
                 stock: 50,
                 imagen: 'https://images.unsplash.com/photo-1629203851122-3726ecdf080e?w=800'
             },
@@ -218,7 +223,7 @@ async function seed() {
                 nombre: 'Flan Casero',
                 descripcion: 'Flan con dulce de leche',
                 precio: 2500,
-                categoriaId: categoriasDB.Postres._id,
+                categoria: 'Postres',
                 stock: 15,
                 imagen: 'https://images.unsplash.com/photo-1488477181946-6428a0291777?w=800'
             },
@@ -226,7 +231,7 @@ async function seed() {
                 nombre: 'Brownie',
                 descripcion: 'Brownie de chocolate',
                 precio: 2800,
-                categoriaId: categoriasDB.Postres._id,
+                categoria: 'Postres',
                 stock: 15,
                 imagen: 'https://images.unsplash.com/photo-1606313564200-e75d5e30476c?w=800'
             }
@@ -235,14 +240,24 @@ async function seed() {
         const productosDB = {};
 
         for (const producto of productosData) {
-            productosDB[producto.nombre] = await Producto.findOneAndUpdate(
-                { nombre: producto.nombre },
-                { $set: producto },
-                { upsert: true, new: true, runValidators: true }
+            const datos = {
+                nombre: producto.nombre,
+                descripcion: producto.descripcion,
+                precio: producto.precio,
+                categoriaId: categoriasDB[producto.categoria].id,
+                stock: producto.stock,
+                disponible: producto.stock > 0,
+                imagen: producto.imagen
+            };
+
+            productosDB[producto.nombre] = await guardar(
+                Producto,
+                'nombre',
+                producto.nombre,
+                datos,
+                transaction
             );
         }
-
-        console.log('Productos inicializados');
 
         // 5. COMBOS
         const combosData = [
@@ -250,36 +265,35 @@ async function seed() {
                 nombre: 'Combo Hamburguesa',
                 descripcion: 'Hamburguesa clásica con bebida',
                 productosIds: [
-                    productosDB['Hamburguesa Clásica']._id,
-                    productosDB['Coca Cola 500ml']._id
+                    productosDB['Hamburguesa Clásica'].id,
+                    productosDB['Coca Cola 500ml'].id
                 ],
                 precioCombo: 8000,
                 descuento: 10,
-                precioFinal: 7200
+                precioFinal: 7200,
+                activo: true
             },
             {
                 nombre: 'Combo Familiar',
                 descripcion: 'Pizza especial con dos bebidas',
                 productosIds: [
-                    productosDB['Pizza Especial']._id,
-                    productosDB['Coca Cola 500ml']._id,
-                    productosDB['Sprite 500ml']._id
+                    productosDB['Pizza Especial'].id,
+                    productosDB['Coca Cola 500ml'].id,
+                    productosDB['Sprite 500ml'].id
                 ],
                 precioCombo: 15000,
                 descuento: 10,
-                precioFinal: 13500
+                precioFinal: 13500,
+                activo: true
             }
         ];
 
         for (const combo of combosData) {
-            await Combo.findOneAndUpdate(
-                { nombre: combo.nombre },
-                { $set: combo },
-                { upsert: true, new: true, runValidators: true }
+            await guardar(
+                Combo, 'nombre', combo.nombre,
+                combo, transaction
             );
         }
-
-        console.log('Combos inicializados');
 
         // 6. OFERTAS
         const fechaInicio = new Date();
@@ -294,7 +308,8 @@ async function seed() {
                 fechaInicio,
                 fechaFin,
                 tipoOferta: 'categoria',
-                categoriasAplicables: [categoriasDB.Hamburguesas._id],
+                categoriasAplicables: [categoriasDB.Hamburguesas.id],
+                productosAplicables: [],
                 activa: true
             },
             {
@@ -304,23 +319,21 @@ async function seed() {
                 fechaInicio,
                 fechaFin,
                 tipoOferta: 'categoria',
-                categoriasAplicables: [categoriasDB.Pizzas._id],
+                categoriasAplicables: [categoriasDB.Pizzas.id],
+                productosAplicables: [],
                 activa: true
             }
         ];
 
         for (const oferta of ofertasData) {
-            await Oferta.findOneAndUpdate(
-                { nombre: oferta.nombre },
-                { $set: oferta },
-                { upsert: true, new: true, runValidators: false }
+            await guardar(
+                Oferta, 'nombre', oferta.nombre,
+                oferta, transaction
             );
         }
 
-        console.log('Ofertas inicializadas');
-
         // 7. CLIENTES DE PRUEBA
-        const clienteData = [
+        const clientesData = [
             {
                 username: 'cliente1',
                 nombre: 'Juan',
@@ -339,148 +352,163 @@ async function seed() {
 
         const clientesDB = [];
 
-        for (const datos of clienteData) {
-            let usuario = await Usuario.findOne({ username: datos.username });
-
-            if (!usuario) {
-                usuario = await Usuario.create({
+        for (const datos of clientesData) {
+            const usuario = await guardar(
+                Usuario, 'username', datos.username,
+                {
                     username: datos.username,
                     nombre: datos.nombre,
                     apellido: datos.apellido,
                     email: datos.email,
                     password: passwordHash,
-                    rolId: rolesDB.cliente._id
-                });
-            }
+                    rolId: rolesDB.cliente.id,
+                    estado: true
+                },
+                transaction
+            );
 
-            let cliente = await Cliente.findOne({ usuarioId: usuario._id });
-
-            if (!cliente) {
-                cliente = await Cliente.create({
-                    usuarioId: usuario._id,
+            const cliente = await guardar(
+                Cliente, 'usuarioId', usuario.id,
+                {
+                    usuarioId: usuario.id,
                     direccion: datos.direccion,
-                    puntos: 0
-                });
-            }
+                    puntos: 0,
+                    preferenciasAlimentarias: []
+                },
+                transaction
+            );
 
-            if (!usuario.clienteId) {
-                usuario.clienteId = cliente._id;
-                await usuario.save();
-            }
+            await usuario.update(
+                { clienteId: cliente.id },
+                { transaction }
+            );
 
             clientesDB.push(cliente);
         }
 
-        console.log('Clientes de prueba inicializados');
-
         // 8. REPARTIDOR DE PRUEBA
-        let usuarioRepartidor = await Usuario.findOne({ username: 'repartidor1' });
-
-        if (!usuarioRepartidor) {
-            usuarioRepartidor = await Usuario.create({
+        const usuarioRepartidor = await guardar(
+            Usuario, 'username', 'repartidor1',
+            {
                 username: 'repartidor1',
                 nombre: 'Carlos',
                 apellido: 'Gomez',
                 email: 'repartidor@demo.com',
                 password: passwordHash,
-                rolId: rolesDB.repartidor._id
-            });
-        }
+                rolId: rolesDB.repartidor.id,
+                estado: true
+            },
+            transaction
+        );
 
-        let repartidor = await Repartidor.findOne({
-            usuarioId: usuarioRepartidor._id
-        });
-
-        if (!repartidor) {
-            repartidor = await Repartidor.create({
-                usuarioId: usuarioRepartidor._id,
+        const repartidor = await guardar(
+            Repartidor, 'usuarioId', usuarioRepartidor.id,
+            {
+                usuarioId: usuarioRepartidor.id,
                 estado: 'disponible',
                 vehiculo: 'Motocicleta',
                 numeroLicencia: 'LIC-0001'
-            });
-        }
+            },
+            transaction
+        );
 
-        if (!usuarioRepartidor.repartidorId) {
-            usuarioRepartidor.repartidorId = repartidor._id;
-            await usuarioRepartidor.save();
-        }
-
-        console.log('Repartidor inicializado');
+        await usuarioRepartidor.update(
+            { repartidorId: repartidor.id },
+            { transaction }
+        );
 
         // 9. PEDIDO DE PRUEBA
-        let pedido = await Pedido.findOne({
-            observaciones: 'Pedido generado por seed'
-        });
+        const hamburguesa = productosDB['Hamburguesa Clásica'];
+        const cocaCola = productosDB['Coca Cola 500ml'];
 
-        if (!pedido) {
-            pedido = await Pedido.create({
-                clienteId: clientesDB[0]._id,
+        const pedido = await guardar(
+            Pedido,
+            'observaciones',
+            'Pedido generado por seed',
+            {
+                clienteId: clientesDB[0].id,
                 estado: 'entregado',
                 direccionEntrega: 'Av. Belgrano 500, San Salvador de Jujuy',
                 metodoPago: 'Efectivo',
                 detalleProductos: [
                     {
-                        productoId: productosDB['Hamburguesa Clásica']._id,
+                        productoId: hamburguesa.id,
                         nombreProducto: 'Hamburguesa Clásica',
                         cantidad: 2,
-                        precioUnitario: productosDB['Hamburguesa Clásica'].precio,
-                        subtotal: productosDB['Hamburguesa Clásica'].precio * 2
+                        precioUnitario: Number(hamburguesa.precio),
+                        subtotal: Number(hamburguesa.precio) * 2
                     },
                     {
-                        productoId: productosDB['Coca Cola 500ml']._id,
+                        productoId: cocaCola.id,
                         nombreProducto: 'Coca Cola 500ml',
                         cantidad: 1,
-                        precioUnitario: productosDB['Coca Cola 500ml'].precio,
-                        subtotal: productosDB['Coca Cola 500ml'].precio
+                        precioUnitario: Number(cocaCola.precio),
+                        subtotal: Number(cocaCola.precio)
                     }
                 ],
                 costoEnvio: 1000,
                 descuentos: 0,
-                repartidorId: repartidor._id,
+                repartidorId: repartidor.id,
                 observaciones: 'Pedido generado por seed'
-            });
-        }
-
-        console.log('Pedido de prueba inicializado');
-
-        // 10. CALIFICACIÓN DE PRUEBA
-        await Calificacion.updateOne(
-            { pedidoId: pedido._id },
-            {
-                $setOnInsert: {
-                    pedidoId: pedido._id,
-                    clienteId: clientesDB[0]._id,
-                    puntuacionComida: 5,
-                    puntuacionServicio: 5,
-                    puntuacionEntrega: 5,
-                    comentario: 'Excelente servicio y comida',
-                    calificacionProductos: [
-                        {
-                            productoId: productosDB['Hamburguesa Clásica']._id,
-                            nombreProducto: 'Hamburguesa Clásica',
-                            puntuacion: 5,
-                            comentario: 'Muy rica'
-                        }
-                    ]
-                }
             },
-            { upsert: true }
+            transaction
         );
 
-        console.log('Calificación inicializada');
+        // 10. CALIFICACIÓN DE PRUEBA
+        await guardar(
+            Calificacion,
+            'pedidoId',
+            pedido.id,
+            {
+                pedidoId: pedido.id,
+                clienteId: clientesDB[0].id,
+                puntuacionComida: 5,
+                puntuacionServicio: 5,
+                puntuacionEntrega: 5,
+                comentario: 'Excelente servicio y comida',
+                calificacionProductos: [
+                    {
+                        productoId: String(hamburguesa.id),
+                        nombreProducto: 'Hamburguesa Clásica',
+                        puntuacion: 5,
+                        comentario: 'Muy rica'
+                    }
+                ]
+            },
+            transaction
+        );
 
-        console.log('\nSeed ejecutado correctamente');
+        await transaction.commit();
+
+        console.log('\nSeed ejecutado correctamente.');
         console.log('Usuarios del grupo:');
 
-        integrantes.forEach(u => {
-            console.log(`- ${u.username} / hia2026`);
+        integrantes.forEach(usuario => {
+            console.log(`- ${usuario.username} / hia2026`);
         });
 
+        console.log('\nDatos cargados:');
+        console.log('- 5 roles');
+        console.log('- 4 usuarios del grupo');
+        console.log('- 5 categorías con imágenes');
+        console.log('- 14 productos con imágenes');
+        console.log('- 2 combos');
+        console.log('- 2 ofertas');
+        console.log('- 2 clientes');
+        console.log('- 1 repartidor');
+        console.log('- 1 pedido');
+        console.log('- 1 calificación');
+
     } catch (error) {
+        if (transaction && !transaction.finished) {
+            await transaction.rollback();
+        }
+
         console.error('Error ejecutando seed:', error);
         process.exitCode = 1;
+
     } finally {
-        await mongoose.disconnect();
+        await sequelize.close();
     }
 }
 

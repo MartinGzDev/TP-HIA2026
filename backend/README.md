@@ -1,16 +1,14 @@
 # Backend – TP HIA 2026
 
-Backend del proyecto desarrollado con Node.js, Express y MongoDB.
+API del proyecto Grupo 14 desarrollada con Node.js, Express, Sequelize y PostgreSQL.
 
-## 📋 Requisitos previos
+## Requisitos
 
-- Node.js.
+- Node.js 20 o superior.
 - npm.
-- MongoDB instalado y ejecutándose localmente.
+- Docker y Docker Compose.
 
-## 🚀 Instalación y configuración
-
-### 1. Instalar dependencias
+## Instalación
 
 Desde la carpeta `backend`:
 
@@ -18,9 +16,7 @@ Desde la carpeta `backend`:
 npm install
 ```
 
-### 2. Crear el archivo de configuración
-
-Copiar la plantilla:
+Crear la configuración local:
 
 ```bash
 cp config.example.js config.js
@@ -32,115 +28,72 @@ En Windows CMD:
 copy config.example.js config.js
 ```
 
-Editar `config.js`:
+Completar `config.js` con los datos de PostgreSQL, Google OAuth y JWT. La configuración por defecto de Docker Compose del proyecto es:
 
-```javascript
-module.exports = {
-  GOOGLE_CLIENT_ID: 'your-google-client-id-here',
-  JWT_SECRET: 'coloca-una-clave-segura',
-  MONGODB_URI: 'mongodb://localhost:27017/hia_grupo14',
-  PORT: 3000,
-  NODE_ENV: 'development'
-};
+```js
+DB_HOST: 'localhost',
+DB_PORT: 5432,
+DB_NAME: 'hia_grupo14',
+DB_USER: 'postgres',
+DB_PASSWORD: 'hia2026'
 ```
 
-### 3. Configuración de MongoDB
+## Iniciar PostgreSQL
 
-Verificar que MongoDB esté iniciado.
-
-La configuración predeterminada utiliza:
-
-```text
-mongodb://localhost:27017/hia_grupo14
-```
-
-Si se utiliza otra instancia o una base de datos diferente, modificar `MONGODB_URI` en `config.js`.
-
-### 4. Inicializar los roles
-
-Antes de registrar usuarios, ejecutar el script de inicialización:
+Desde la raíz del repositorio (donde está `docker-compose.yml`):
 
 ```bash
-node seeds/seed.js
+docker compose up -d postgres
 ```
 
-Este proceso carga los roles necesarios para el funcionamiento del sistema:
+## Inicializar datos de prueba
 
-- admin
-- cliente
-- supervisor_cocina
-- supervisor_ventas
-- repartidor
+Desde `backend`:
 
-### 5. Ejecutar el backend
+```bash
+npm run seed
+```
 
-Modo desarrollo:
+El seed crea los roles, usuarios del grupo, categorías, productos, un combo, una oferta y registros de demostración.
+
+Usuarios del grupo: `cquiroga`, `rpatagua`, `mgutierrez`, `ggregorio`.
+
+Contraseña inicial: `hia2026`.
+
+## Ejecutar la API
+
+Desarrollo:
 
 ```bash
 npm run dev
 ```
 
-Modo normal:
+Producción/local:
 
 ```bash
 npm start
 ```
 
-El servidor estará disponible en:
+La API queda disponible en `http://localhost:3000`.
 
-http://localhost:3000
+## Endpoints de diagnóstico
 
-## 📁 Estructura
+- `GET /api/health`
+- `GET /api/metrics`
+
+## Estructura
 
 ```text
 backend/
-├── controllers/       # Controladores
-├── middleware/        # Autenticación y autorización
-├── models/            # Modelos de MongoDB
-├── routes/             # Rutas de la API
-├── seeds/              # Scripts de inicialización
+├── config/             # Conexión Sequelize
+├── controllers/        # Controladores de la API
+├── middleware/         # Autenticación y autorización
+├── models/             # Modelos, asociaciones y compatibilidad de consultas
+├── routes/             # Rutas Express
+├── seeds/              # Datos iniciales PostgreSQL
 ├── config.example.js   # Plantilla de configuración
-├── config.js           # Configuración local (no versionada)
-├── database.js         # Conexión a MongoDB
-├── index.js            # Punto de entrada
-├── package.json
-└── README.md
+├── database.js         # Exporta la instancia Sequelize
+└── index.js            # Punto de entrada
 ```
 
-## 🔑 Configuración importante
-
-| Parámetro | Descripción |
-|---|---|
-| GOOGLE_CLIENT_ID | Identificador de Google OAuth |
-| JWT_SECRET | Clave para firmar y verificar tokens |
-| MONGODB_URI | Dirección de conexión a MongoDB |
-| PORT | Puerto del servidor |
-| NODE_ENV | Entorno de ejecución |
-
-El middleware de autenticación y el controlador de autenticación utilizan el mismo `JWT_SECRET`.
-
-## 📝 Consideraciones
-
-- `config.js` no se sube a Git.
-- Cada integrante debe generar su propio archivo desde `config.example.js`.
-- MongoDB debe estar activo antes de iniciar el backend.
-- Los roles deben inicializarse antes de registrar usuarios.
-- Para utilizar autenticación con Google se debe configurar un Client ID válido.
-
-## 🐛 Problemas frecuentes
-
-**Error de conexión con MongoDB**
-
-Verificar que MongoDB esté iniciado y que `MONGODB_URI` sea correcta.
-
-**Error de roles no encontrados**
-
-Ejecutar nuevamente:
-
-```bash
-node seeds/seed.js
-```
-
-**Error de token inválido**
-
-Verificar que el `JWT_SECRET` utilizado para generar y verificar el token sea el mismo.
+`config.js`, `.env` y `node_modules` son locales y no deben subirse al repositorio.

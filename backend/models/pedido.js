@@ -1,160 +1,113 @@
-const mongoose = require('mongoose');
-const Schema = mongoose.Schema;
 
-// --- Esquema para el Subdocumento DetalleProducto ---
-// No se exporta como un modelo independiente.
-const detalleProductoSchema = new Schema({
-  productoId: {
-    type: Schema.Types.ObjectId,
-    ref: 'Producto', // Referencia al modelo Producto
-  },
-  comboId: {
-    type: Schema.Types.ObjectId,
-    ref: 'Combo', // Referencia al modelo Combo
-  },
-  nombreProducto: { // Para mantener un registro si el nombre del producto cambia
-    type: String,
-    required: true,
-    trim: true,
-  },
-  cantidad: {
-    type: Number,
-    required: true,
-    min: 1,
-  },
-  precioUnitario: { // Almacena el precio unitario al momento de la compra
-    type: Number,
-    required: true,
-    min: 0,
-  },
-  // Agregamos el campo 'subtotal' directamente aquí para cada ítem
-  subtotal: {
-    type: Number,
-    default: 0,
-    min: 0,
-  },
-}, {
-  _id: false, // Los subdocumentos no necesitan su propio _id por defecto
-  timestamps: false, // No necesitamos timestamps para cada detalle de producto
-});
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 
-// Puedes añadir un hook pre-save directamente al subdocumento si lo prefieres,
-// pero a menudo es más eficiente manejar todos los cálculos en el hook principal del Pedido
-// para evitar múltiples iteraciones o lógica duplicada.
-// Por simplicidad, lo haremos en el pre-save del Pedido principal.
-
-
-// --- Esquema del Modelo Principal Pedido ---
-const pedidoSchema = new Schema({
+const Pedido = sequelize.define('Pedido', {
   clienteId: {
-    type: Schema.Types.ObjectId,
-    ref: 'Cliente', // Referencia al modelo de Cliente
-    required: true,
+    type: DataTypes.INTEGER,
+    allowNull: false
   },
   fechaPedido: {
-    type: Date,
-    default: Date.now, // Fecha y hora actual por defecto
-    required: true,
+    type: DataTypes.DATE,
+    allowNull: false,
+    defaultValue: DataTypes.NOW
   },
   estado: {
-    type: String,
-    enum: ['pendiente', 'confirmado', 'en_preparacion', 'en_envio', 'entregado', 'cancelado'],
-    default: 'pendiente',
-    required: true,
+    type: DataTypes.ENUM(
+      'pendiente',
+      'confirmado',
+      'en_preparacion',
+      'en_envio',
+      'entregado',
+      'cancelado'
+    ),
+    defaultValue: 'pendiente',
+    allowNull: false
   },
   direccionEntrega: {
-    type: String,
-    required: true,
-    trim: true,
+    type: DataTypes.STRING,
+    allowNull: false
   },
   metodoPago: {
-    type: String,
-    required: true,
-    enum: ['Tarjeta de Crédito', 'Tarjeta de Débito', 'Efectivo', 'Transferencia', 'Mercado Pago', 'Otro'],
+    type: DataTypes.ENUM(
+      'Tarjeta de Crédito',
+      'Tarjeta de Débito',
+      'Efectivo',
+      'Transferencia',
+      'Mercado Pago',
+      'Otro'
+    ),
+    allowNull: false
   },
-  subtotal: { // Subtotal de todos los productos del pedido antes de descuentos/envío
-    type: Number,
-    default: 0,
-    min: 0,
+  subtotal: {
+    type: DataTypes.DECIMAL(12, 2),
+    defaultValue: 0
   },
   descuentos: {
-    type: Number,
-    default: 0,
-    min: 0,
+    type: DataTypes.DECIMAL(12, 2),
+    defaultValue: 0
   },
   costoEnvio: {
-    type: Number,
-    default: 0,
-    min: 0,
+    type: DataTypes.DECIMAL(12, 2),
+    defaultValue: 0
   },
-  total: { // Monto final a pagar
-    type: Number,
-    default: 0,
-    min: 0,
+  total: {
+    type: DataTypes.DECIMAL(12, 2),
+    defaultValue: 0
   },
-  // Aquí usamos el esquema de subdocumento definido anteriormente
-  detalleProductos: [detalleProductoSchema], 
-  
+  detalleProductos: {
+    type: DataTypes.JSONB,
+    allowNull: false,
+    defaultValue: []
+  },
   fechaEstimadaEntrega: {
-    type: Date,
-    default: null,
+    type: DataTypes.DATE,
+    allowNull: true
   },
   repartidorId: {
-    type: Schema.Types.ObjectId,
-    ref: 'Repartidor', // Referencia al modelo Repartidor
-    default: null,
+    type: DataTypes.INTEGER,
+    allowNull: true
   },
   observaciones: {
-    type: String,
-    trim: true,
-    default: null,
-  },
+    type: DataTypes.TEXT,
+    allowNull: true
+  }
 }, {
-  timestamps: true, // Agrega createdAt y updatedAt
+  tableName: 'pedidos',
+  timestamps: true,
+  hooks: {
+    beforeValidate(pedido) {
+      pedido.calcularTotal();
+    }
+  }
 });
 
-// --- Métodos de instancia o estáticos para el modelo ---
-
-// Método de instancia para calcular el total del pedido
-// Este método ahora también calcula los subtotales individuales de los productos.
-pedidoSchema.methods.calcularTotal = function() {
+Pedido.prototype.calcularTotal = function() {
   let subtotalGeneral = 0;
-  
-  // Verificar que detalleProductos existe y es un array
-  if (this.detalleProductos && Array.isArray(this.detalleProductos)) {
-    this.detalleProductos.forEach(item => {
-      // Verificar que el item tiene los campos necesarios
-      if (item.cantidad && item.precioUnitario) {
-        // Calcula y asigna el subtotal para cada ítem de producto
-        item.subtotal = item.cantidad * item.precioUnitario; 
-        subtotalGeneral += item.subtotal;
-      }
+
+  if (Array.isArray(this.detalleProductos)) {
+    this.detalleProductos = this.detalleProductos.map(item => {
+      const subtotal = Number(item.cantidad) * Number(item.precioUnitario);
+
+      subtotalGeneral += subtotal;
+
+      return {
+        ...item,
+        subtotal
+      };
     });
   }
-  
-  this.subtotal = subtotalGeneral; // Asigna el subtotal general del pedido
-  this.total = this.subtotal - (this.descuentos || 0) + (this.costoEnvio || 0);
-  if (this.total < 0) this.total = 0; // Asegurarse que el total no sea negativo
+
+  this.subtotal = subtotalGeneral;
+
+  this.total = Math.max(
+    0,
+    subtotalGeneral -
+    Number(this.descuentos || 0) +
+    Number(this.costoEnvio || 0)
+  );
+
   return this.total;
 };
-
-// Hook pre-validate para asegurar que los cálculos se hagan antes de la validación
-pedidoSchema.pre('validate', function(next) {
-  if (this.isNew && this.detalleProductos && this.detalleProductos.length > 0) {
-    this.calcularTotal();
-  }
-  next();
-});
-
-// Hook pre-save para asegurar que los subtotales y el total general se calculen antes de guardar
-pedidoSchema.pre('save', function(next) {
-  // Siempre recalcula para documentos nuevos o cuando los campos relevantes han sido modificados
-  if (this.isNew || this.isModified('detalleProductos') || this.isModified('descuentos') || this.isModified('costoEnvio')) {
-    this.calcularTotal();
-  }
-  next();
-});
-
-const Pedido = mongoose.model('Pedido', pedidoSchema);
 
 module.exports = Pedido;

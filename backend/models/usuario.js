@@ -1,87 +1,94 @@
-const mongoose = require('mongoose');
-const Schema = mongoose.Schema;
-const Rol = require('./rol'); // Asegúrate de que la ruta sea correcta
-const Cliente = require('./cliente.model'); // Asegúrate de que la ruta sea correcta
-const Repartidor = require('./Repartidor'); // Asegúrate de que la ruta sea correcta
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
+const bcrypt = require('bcryptjs');
 
-const usuarioSchema = new Schema({
+const Usuario = sequelize.define('Usuario', {
   username: {
-    type: String,
-    required: true,
-    unique: true, // Asegura que no haya usernames duplicados
-    trim: true, // Elimina espacios en blanco al inicio y al final
-    lowercase: true, // Guarda el username en minúsculas
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true,
+    set(value) {
+      this.setDataValue('username', value.trim().toLowerCase());
+    }
   },
   password: {
-    type: String,
-    required: function() {
-      // La contraseña es requerida solo si no hay googleId (no es usuario OAuth)
-      return !this.googleId;
-    },
+    type: DataTypes.STRING,
+    allowNull: true
   },
   email: {
-    type: String,
-    required: true,
-    unique: true, // Mantenemos unique para email, ya que cada usuario debe tener un email único
-    trim: true,
-    lowercase: true,
-    match: /^\S+@\S+\.\S+$/, // Validación básica de formato de email
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true,
+    set(value) {
+      this.setDataValue('email', value.trim().toLowerCase());
+    },
+    validate: {
+      isEmail: {
+        msg: 'El email no tiene un formato válido.'
+      }
+    }
   },
   telefono: {
-    type: String,
-    trim: true,
-    required: false, // <--- ¡CRÍTICO! Ahora es opcional para que coincida con el frontend si no es requerido.
-    match: /^\+?[1-9]\d{1,14}$/, // Validación básica de formato de teléfono (E.164)
+    type: DataTypes.STRING,
+    allowNull: true,
+    validate: {
+      is: {
+        args: /^\+?[1-9]\d{1,14}$/,
+        msg: 'El teléfono debe tener un formato E.164 válido.'
+      }
+    }
   },
   estado: {
-    type: Boolean,
-    default: true, // Por defecto, el usuario está activo
+    type: DataTypes.BOOLEAN,
+    defaultValue: true
   },
-  rolId: { // Nombre del rol del usuario, puede ser un string o una referencia a un modelo de Rol
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Rol', // Referencia al modelo de Rol
-    required: true,
+  rolId: {
+    type: DataTypes.INTEGER,
+    allowNull: false
   },
   nombre: {
-    type: String,
-    required: true,
-    trim: true,
+    type: DataTypes.STRING,
+    allowNull: false,
+    set(value) {
+      this.setDataValue('nombre', value.trim());
+    }
   },
   apellido: {
-    type: String,
-    required: true,
-    trim: true,
+    type: DataTypes.STRING,
+    allowNull: false,
+    set(value) {
+      this.setDataValue('apellido', value.trim());
+    }
   },
   googleId: {
-    type: String,
+    type: DataTypes.STRING,
     unique: true,
-    sparse: true, // Permite valores nulos para unique
-    trim: true,
+    allowNull: true
   },
   clienteId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Cliente', // Referencia a un modelo de Cliente (si existe)
-    //default: null, // Opcional, si el usuario puede no estar asociado a un cliente específico
-    unique: true, // Un usuario solo puede tener un perfil de cliente
-    sparse: true // <--- ¡CRÍTICO! Permite valores nulos para unique en este campo
+    type: DataTypes.INTEGER,
+    unique: true,
+    allowNull: true
   },
   repartidorId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Repartidor', // Referencia a un modelo de Repartidor
-    //default: null, // Opcional, si el usuario puede no estar asociado a un repartidor específico
-    unique: true, // Un usuario solo puede tener un perfil de repartidor
-    sparse: true // <--- ¡CRÍTICO! Permite valores nulos para unique en este campo
-  },
+    type: DataTypes.INTEGER,
+    unique: true,
+    allowNull: true
+  }
 }, {
-  timestamps: true // Esto añade campos `createdAt` y `updatedAt` automáticamente
+  tableName: 'usuarios',
+  timestamps: true,
+  hooks: {
+    beforeValidate(usuario) {
+      if (!usuario.googleId && !usuario.password) {
+        throw new Error('La contraseña es obligatoria para usuarios que no utilizan Google.');
+      }
+    }
+  }
 });
 
-// Método para comparar contraseñas
-usuarioSchema.methods.compararPassword = async function (passwordIngresada) {
-  const bcrypt = require('bcryptjs');
-  return await bcrypt.compare(passwordIngresada, this.password);
+Usuario.prototype.compararPassword = async function(passwordIngresada) {
+  return bcrypt.compare(passwordIngresada, this.password);
 };
-
-const Usuario = mongoose.model('Usuario', usuarioSchema);
 
 module.exports = Usuario;

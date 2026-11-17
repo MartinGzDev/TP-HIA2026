@@ -31,7 +31,7 @@ exports.crearCategoria = async (req, res) => {
     if (error.code === 11000) {
       return res.status(409).json({ mensaje: 'Ya existe una categoría con este nombre.', detalle: error.message });
     }
-    // Errores de validación de Mongoose
+    // Errores de validación de Sequelize
     if (error.name === 'ValidationError') {
       return res.status(400).json({ mensaje: 'Error de validación al crear la categoría.', detalle: error.message });
     }
@@ -120,7 +120,7 @@ exports.actualizarCategoria = async (req, res) => {
     if (error.code === 11000) {
       return res.status(409).json({ mensaje: 'Ya existe otra categoría con el nombre proporcionado.', detalle: error.message });
     }
-    // Errores de validación de Mongoose
+    // Errores de validación de Sequelize
     if (error.name === 'ValidationError') {
       return res.status(400).json({ mensaje: 'Error de validación al actualizar la categoría.', detalle: error.message });
     }

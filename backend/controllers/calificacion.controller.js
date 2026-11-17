@@ -1,4 +1,3 @@
-const mongoose = require('mongoose');
 const Calificacion = require('../models/Calificacion');
 const Pedido = require('../models/pedido'); // Para verificar que el pedido existe y ya fue entregado
 const Cliente = require('../models/cliente.model'); // Para verificar que el cliente existe y obtener el clienteId
@@ -483,19 +482,29 @@ exports.getCalificacionesPromedioProducto = async (req, res) => {
   try {
     const { productoId } = req.params; // ID del producto
 
-    // Agregación para calcular el promedio de puntuación para un producto
-    const result = await Calificacion.aggregate([
-      { $unwind: '$calificacionProductos' }, // Desglosa el array de productos calificados
-      { $match: { 'calificacionProductos.productoId': new mongoose.Types.ObjectId(productoId) } }, // Filtra por el producto específico
-      {
-        $group: {
-          _id: '$calificacionProductos.productoId',
-          nombreProducto: { $first: '$calificacionProductos.nombreProducto' },
-          puntuacionPromedio: { $avg: '$calificacionProductos.puntuacion' },
-          totalCalificaciones: { $sum: 1 }
+    // Calcula el promedio desde el JSONB de PostgreSQL.
+    const calificaciones = await Calificacion.findAll({
+      attributes: ['calificacionProductos'],
+      raw: true
+    });
+
+    const puntuaciones = [];
+    let nombreProducto = null;
+    for (const registro of calificaciones) {
+      for (const item of (registro.calificacionProductos || [])) {
+        if (String(item.productoId) === String(productoId)) {
+          puntuaciones.push(Number(item.puntuacion));
+          nombreProducto = item.nombreProducto || nombreProducto;
         }
       }
-    ]);
+    }
+
+    const result = puntuaciones.length ? [{
+      _id: productoId,
+      nombreProducto,
+      puntuacionPromedio: puntuaciones.reduce((a, b) => a + b, 0) / puntuaciones.length,
+      totalCalificaciones: puntuaciones.length
+    }] : [];
 
     if (result.length === 0) {
       return res.status(404).json({ mensaje: 'Producto no encontrado o sin calificaciones.' });

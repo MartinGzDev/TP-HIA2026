@@ -326,7 +326,7 @@ exports.obtenerOfertasPorProducto = async (req, res) => {
 
     const ofertasCategoria = await Oferta.find({
       tipoOferta: 'categoria',
-      categoriasAplicables: producto.categoria,
+      categoriasAplicables: producto.categoriaId,
       activa: true
     }).populate('categoriasAplicables', 'nombre');
 

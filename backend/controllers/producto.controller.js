@@ -111,7 +111,7 @@ exports.createProduct = async (req, res) => {
     res.status(201).json({ mensaje: 'Producto creado exitosamente.', product: productWithCategory });
   } catch (error) {
     console.error('Error al crear producto:', error);
-    if (error.name === 'ValidationError') { // Errores de validación de Mongoose (minlength, maxlength, unique, etc.)
+    if (error.name === 'ValidationError') { // Errores de validación de Sequelize (minlength, maxlength, unique, etc.)
       const messages = Object.values(error.errors).map(val => val.message);
       return res.status(400).json({ mensaje: 'Errores de validación:', errores: messages });
     }

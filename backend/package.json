@@ -1,14 +1,11 @@
 {
-  "name": "branch-cris-nil",
+  "name": "tp-final-hia-grupo14",
   "version": "1.0.0",
   "description": "",
-  "homepage": "https://github.com/xriisemanuel/proybackendgrupo13#readme",
-  "bugs": {
-    "url": "https://github.com/xriisemanuel/proybackendgrupo13/issues"
-  },
+  "homepage": "https://github.com/MartinGzDev/TP-HIA2026",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xriisemanuel/proybackendgrupo13.git"
+    "url": "git+https://github.com/MartinGzDev/TP-HIA2026.git"
   },
   "license": "ISC",
   "author": "",
@@ -16,7 +13,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "seed": "node seeds/seed.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
@@ -25,9 +23,11 @@
     "express": "^5.1.0",
     "google-auth-library": "^10.1.0",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.16.3",
     "nodemailer": "^7.0.3",
-    "openai": "^5.8.2"
+    "openai": "^5.8.2",
+    "pg": "^8.23.1",
+    "pg-hstore": "^2.3.4",
+    "sequelize": "^6.37.8"
   },
   "devDependencies": {
     "@types/node": "^24.0.10",

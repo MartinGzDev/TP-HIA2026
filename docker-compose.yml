@@ -1,0 +1,30 @@
+
+services:
+  # Base de datos PostgreSQL
+  postgres:
+    image: postgres:16
+    container_name: tpfinalgrupo14-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hia_grupo14
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: hia2026
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - tpfinalgrupo14-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hia_grupo14"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  tpfinalgrupo14-network:
+    driver: bridge

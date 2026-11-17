@@ -56,7 +56,7 @@ router.put('/:id/ubicacion', repartidorController.updateUbicacion); // La autori
 // NOTA: Las rutas PATCH para 'estado' y 'registrar-entrega' que mencionaste anteriormente
 // no están incluidas aquí porque las funciones correspondientes (cambiarEstadoRepartidor,
 // registrarEntregaRepartidor) no son métodos exportados directamente en el repartidor.controller.js
-// que te proporcioné. Esos son métodos de instancia del esquema de Mongoose.
+// que te proporcioné. Esos son métodos de instancia del modelo Sequelize.
 // Si necesitas endpoints específicos para esas operaciones, deberías añadir
 // funciones exportadas a tu controlador (repartidor.controller.js) para manejarlas.
 router.patch('/:id/registrar-entrega', repartidorController.registrarEntregaRepartidor); // Esta ruta debería ser llamada por el sistema de pedidos

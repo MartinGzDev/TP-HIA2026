@@ -1,23 +1,29 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 
-const rolSchema = new mongoose.Schema({
+const Rol = sequelize.define('Rol', {
   nombre: {
-    type: String,
-    required: true,
+    type: DataTypes.STRING,
+    allowNull: false,
     unique: true,
-    trim: true,
-    lowercase: true, // Convierte el nombre a minúsculas para evitar duplicados
-    match: [/^[a-zA-Z\s]*$/,'El nombre del rol solo puede contener letras y espacios.']
+    set(value) {
+      this.setDataValue('nombre', value.trim().toLowerCase());
+    },
+    validate: {
+      is: {
+        args: /^[a-zA-Z_\s]*$/,
+        msg: 'El nombre del rol solo puede contener letras y espacios.'
+      }
+    }
   },
   estado: {
-    type: Boolean,
-    default: true,
-  },
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true
+  }
 }, {
-  timestamps: true, // Agrega campos de fecha de creación y actualización
-  versionKey: false // Elimina el campo __v que Mongoose agrega por defecto
+  tableName: 'roles',
+  timestamps: true
 });
-
-const Rol = mongoose.model('Rol', rolSchema);
 
 module.exports = Rol;

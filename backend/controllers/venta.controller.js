@@ -1,6 +1,7 @@
 const Venta = require('../models/Venta');
 const Cliente = require('../models/cliente.model'); // Necesario para actualizar puntos del cliente
 const Pedido = require('../models/pedido');   // Necesario para verificar el pedido
+const { fn, col } = require('sequelize');
 
 // --- Operaciones CRUD Básicas y Específicas de Venta ---
 
@@ -115,12 +116,13 @@ exports.ventasPorFecha = async (req, res) => {
 
 exports.totalVentas = async (req, res) => {
   try {
-    const total = await Venta.aggregate([
-      { $group: { _id: null, totalGeneral: { $sum: '$montoTotal' } } }
-    ]);
+    const total = await Venta.findOne({
+      attributes: [[fn('COALESCE', fn('SUM', col('montoTotal')), 0), 'totalGeneral']],
+      raw: true
+    });
     res.status(200).json({
       mensaje: 'Total de ventas calculado',
-      totalGeneral: total.length > 0 ? total[0].totalGeneral : 0
+      totalGeneral: Number(total?.totalGeneral || 0)
     });
   } catch (error) {
     res.status(500).json({

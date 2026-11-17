@@ -1,101 +1,67 @@
-const mongoose = require('mongoose');
-const Schema = mongoose.Schema;
 
-const ventaSchema = new Schema({
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
+
+const Venta = sequelize.define('Venta', {
   pedidoId: {
-    type: Schema.Types.ObjectId,
-    ref: 'Pedido', // Referencia al modelo de Pedido
-    required: true,
-    unique: true, // Una venta por cada pedido
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    unique: true
   },
   clienteId: {
-    type: Schema.Types.ObjectId,
-    ref: 'Cliente', // Referencia al modelo de Cliente
-    required: true,
+    type: DataTypes.INTEGER,
+    allowNull: false
   },
   fechaVenta: {
-    type: Date,
-    default: Date.now, // Fecha y hora actual por defecto
-    required: true,
+    type: DataTypes.DATE,
+    allowNull: false,
+    defaultValue: DataTypes.NOW
   },
   montoTotal: {
-    type: Number,
-    required: true,
-    min: 0,
+    type: DataTypes.DECIMAL(12, 2),
+    allowNull: false,
+    validate: {
+      min: 0
+    }
   },
   metodoPago: {
-    type: String,
-    required: true,
-    enum: ['Tarjeta de Crédito', 'Tarjeta de Débito', 'Efectivo', 'Transferencia', 'Mercado Pago', 'Otro'], // Métodos de pago permitidos
+    type: DataTypes.ENUM(
+      'Tarjeta de Crédito',
+      'Tarjeta de Débito',
+      'Efectivo',
+      'Transferencia',
+      'Mercado Pago',
+      'Otro'
+    ),
+    allowNull: false
+  },
+  estadoPago: {
+    type: DataTypes.ENUM('pendiente', 'completado', 'fallido'),
+    allowNull: false,
+    defaultValue: 'pendiente'
   },
   numeroFactura: {
-    type: String,
-    unique: true, // Cada factura debe tener un número único
-    sparse: true, // Permite que haya documentos sin este campo, pero si existe, debe ser único
-    trim: true,
-    default: null, // Puede generarse después
-  },
+    type: DataTypes.STRING,
+    unique: true,
+    allowNull: true,
+    defaultValue: null
+  }
+}, {
+  tableName: 'ventas',
+  timestamps: true
 });
 
-// --- Métodos de instancia o estáticos para el modelo (si necesitas lógica específica) ---
-
-// Método para generar un número de factura (ejemplo simple)
-ventaSchema.methods.generarNumeroFactura = async function() {
+Venta.prototype.generarNumeroFactura = async function() {
   if (!this.numeroFactura) {
-    const prefix = 'INV'; // Prefijo para facturas
-    const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
-    const randomPart = Math.random().toString(36).substring(2, 8).toUpperCase(); // 6 caracteres alfanuméricos
+    const prefix = 'INV';
+    const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const randomPart = Math.random().toString(36).substring(2, 8).toUpperCase();
+
     this.numeroFactura = `${prefix}-${datePart}-${randomPart}`;
-    await this.save(); // Guarda el número de factura generado en la base de datos
-    return this.numeroFactura;
+    await this.save();
   }
+
   return this.numeroFactura;
 };
 
-const Venta = mongoose.model('Venta', ventaSchema);
-
 module.exports = Venta;
-
-
-// const mongoose = require('mongoose');
-
-// const VentaSchema = new mongoose.Schema({
-//   pedidoId: {
-//     type: mongoose.Schema.Types.ObjectId,
-//     ref: 'Pedido',
-//     required: true
-//   },
-//   clienteId: {
-//     type: mongoose.Schema.Types.ObjectId,
-//     ref: 'Cliente',
-//     required: true
-//   },
-//   fechaVenta: {
-//     type: Date,
-//     default: Date.now
-//   },
-//   montoTotal: {
-//     type: Number,
-//     required: true
-//   },
-//   metodoPago: {
-//   type: String,
-//   enum: ['EFECTIVO', 'TARJETA', 'QR'],
-//   required: true
-// },
-
-//   numeroFactura: {
-//     type: String,
-//     required: true,
-//     unique: true
-//   },
-//   estadoPago: {
-//     type: String,
-//     enum: ['pendiente', 'pagado'],
-//     default: 'pendiente'
-//   }
-// }, {
-//   timestamps: true
-// });
-
-// module.exports = mongoose.model('Venta', VentaSchema);
