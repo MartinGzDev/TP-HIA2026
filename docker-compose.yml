@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: hia_grupo14
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: hia2026
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
@@ -21,8 +21,52 @@ services:
       timeout: 5s
       retries: 5
 
+  # Administrador visual de PostgreSQL
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: tpfinalgrupo14-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Servicio automático de backups
+  backup:
+    image: prodrigestivill/postgres-backup-local:16
+    container_name: tpfinalgrupo14-backup
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: hia_grupo14
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SCHEDULE: "0 2 * * *"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 0
+      BACKUP_KEEP_MONTHS: 0
+    volumes:
+      - backups_data:/backups
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  backups_data:
     driver: local
 
 networks:
