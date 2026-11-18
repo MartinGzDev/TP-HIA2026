@@ -1,0 +1,23 @@
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Métricas PostgreSQL del nodo 1
+  - job_name: postgres-patroni1
+    static_configs:
+      - targets:
+          - postgres-exporter1:9187
+
+  # Métricas PostgreSQL del nodo 2
+  - job_name: postgres-patroni2
+    static_configs:
+      - targets:
+          - postgres-exporter2:9187
+
+  # Métricas PostgreSQL del nodo 3
+  - job_name: postgres-patroni3
+    static_configs:
+      - targets:
+          - postgres-exporter3:9187

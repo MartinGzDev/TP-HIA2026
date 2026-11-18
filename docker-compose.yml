@@ -1,79 +1,264 @@
-
 services:
-  # Base de datos PostgreSQL
-  postgres:
-    image: postgres:16
-    container_name: tpfinalgrupo14-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: hia_grupo14
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - tpfinalgrupo14-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d hia_grupo14"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  # =====================================================
+  # ETCD: CONSENSO Y ELECCION DEL LIDER
+  # =====================================================
 
-  # Nodo secundario 2
-  postgres2:
-    image: postgres:16
-    container_name: tpfinalgrupo14-postgres2
+  etcd1:
+    image: quay.io/coreos/etcd:v3.5.21
+    container_name: tpfinalgrupo14-etcd1
+    hostname: etcd1
     restart: unless-stopped
-    entrypoint: ["/bin/bash", "/scripts/replica-entrypoint.sh"]
-    environment:
-      REPLICATION_USER: ${REPLICATION_USER}
-      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
-      PGDATA: /var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5433:5432"
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd1
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd1:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd1:2380
+      - --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=hia-grupo14-etcd
     volumes:
-      - postgres2_data:/var/lib/postgresql/data
-      - ./Cluster-db/scripts/replica-entrypoint.sh:/scripts/replica-entrypoint.sh:ro
+      - etcd1_data:/etcd-data
     networks:
       - tpfinalgrupo14-network
-    depends_on:
-      postgres:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d hia_grupo14"]
+      test: ["CMD", "/usr/local/bin/etcdctl", "--endpoints=http://localhost:2379", "endpoint", "health"]
       interval: 10s
       timeout: 5s
       retries: 10
 
-  # Nodo secundario 3
-  postgres3:
-    image: postgres:16
-    container_name: tpfinalgrupo14-postgres3
+  etcd2:
+    image: quay.io/coreos/etcd:v3.5.21
+    container_name: tpfinalgrupo14-etcd2
+    hostname: etcd2
     restart: unless-stopped
-    entrypoint: ["/bin/bash", "/scripts/replica-entrypoint.sh"]
-    environment:
-      REPLICATION_USER: ${REPLICATION_USER}
-      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
-      PGDATA: /var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5434:5432"
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd2
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd2:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd2:2380
+      - --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=hia-grupo14-etcd
     volumes:
-      - postgres3_data:/var/lib/postgresql/data
-      - ./Cluster-db/scripts/replica-entrypoint.sh:/scripts/replica-entrypoint.sh:ro
+      - etcd2_data:/etcd-data
     networks:
       - tpfinalgrupo14-network
-    depends_on:
-      postgres:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d hia_grupo14"]
+      test: ["CMD", "/usr/local/bin/etcdctl", "--endpoints=http://localhost:2379", "endpoint", "health"]
       interval: 10s
       timeout: 5s
       retries: 10
 
-  # Administrador visual de PostgreSQL
+  etcd3:
+    image: quay.io/coreos/etcd:v3.5.21
+    container_name: tpfinalgrupo14-etcd3
+    hostname: etcd3
+    restart: unless-stopped
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd3
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd3:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd3:2380
+      - --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=hia-grupo14-etcd
+    volumes:
+      - etcd3_data:/etcd-data
+    networks:
+      - tpfinalgrupo14-network
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/etcdctl", "--endpoints=http://localhost:2379", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # =====================================================
+  # POSTGRESQL 16 + PATRONI: TRES NODOS
+  # =====================================================
+
+  patroni1:
+    build:
+      context: ./Cluster-db/patroni
+      dockerfile: Dockerfile
+    image: hia-grupo14/patroni:16
+    container_name: tpfinalgrupo14-patroni1
+    hostname: patroni1
+    restart: unless-stopped
+    environment:
+      PATRONI_NAME: patroni1
+      PATRONI_RESTAPI_CONNECT_ADDRESS: patroni1:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: patroni1:5432
+      PATRONI_SUPERUSER_PASSWORD: ${POSTGRES_PASSWORD}
+      PATRONI_REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+      PATRONI_MONITOR_PASSWORD: ${MONITOR_PASSWORD}
+      PATRONI_DB_NAME: ${POSTGRES_DB:-hia_grupo14}
+    volumes:
+      - patroni1_data:/var/lib/postgresql/data
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      etcd1:
+        condition: service_healthy
+      etcd2:
+        condition: service_healthy
+      etcd3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8008/health > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  patroni2:
+    image: hia-grupo14/patroni:16
+    container_name: tpfinalgrupo14-patroni2
+    hostname: patroni2
+    restart: unless-stopped
+    environment:
+      PATRONI_NAME: patroni2
+      PATRONI_RESTAPI_CONNECT_ADDRESS: patroni2:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: patroni2:5432
+      PATRONI_SUPERUSER_PASSWORD: ${POSTGRES_PASSWORD}
+      PATRONI_REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+      PATRONI_MONITOR_PASSWORD: ${MONITOR_PASSWORD}
+      PATRONI_DB_NAME: ${POSTGRES_DB:-hia_grupo14}
+    volumes:
+      - patroni2_data:/var/lib/postgresql/data
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      etcd1:
+        condition: service_healthy
+      etcd2:
+        condition: service_healthy
+      etcd3:
+        condition: service_healthy
+      patroni1:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8008/health > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  patroni3:
+    image: hia-grupo14/patroni:16
+    container_name: tpfinalgrupo14-patroni3
+    hostname: patroni3
+    restart: unless-stopped
+    environment:
+      PATRONI_NAME: patroni3
+      PATRONI_RESTAPI_CONNECT_ADDRESS: patroni3:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: patroni3:5432
+      PATRONI_SUPERUSER_PASSWORD: ${POSTGRES_PASSWORD}
+      PATRONI_REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+      PATRONI_MONITOR_PASSWORD: ${MONITOR_PASSWORD}
+      PATRONI_DB_NAME: ${POSTGRES_DB:-hia_grupo14}
+    volumes:
+      - patroni3_data:/var/lib/postgresql/data
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      etcd1:
+        condition: service_healthy
+      etcd2:
+        condition: service_healthy
+      etcd3:
+        condition: service_healthy
+      patroni1:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8008/health > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  # =====================================================
+  # POSTGRES EXPORTER: METRICAS DE CADA NODO
+  # =====================================================
+
+  postgres-exporter1:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: tpfinalgrupo14-postgres-exporter1
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_URI: patroni1:5432/${POSTGRES_DB:-hia_grupo14}?sslmode=disable
+      DATA_SOURCE_USER: monitor
+      DATA_SOURCE_PASS: ${MONITOR_PASSWORD}
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      patroni1:
+        condition: service_started
+
+  postgres-exporter2:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: tpfinalgrupo14-postgres-exporter2
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_URI: patroni2:5432/${POSTGRES_DB:-hia_grupo14}?sslmode=disable
+      DATA_SOURCE_USER: monitor
+      DATA_SOURCE_PASS: ${MONITOR_PASSWORD}
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      patroni2:
+        condition: service_started
+
+  postgres-exporter3:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: tpfinalgrupo14-postgres-exporter3
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_URI: patroni3:5432/${POSTGRES_DB:-hia_grupo14}?sslmode=disable
+      DATA_SOURCE_USER: monitor
+      DATA_SOURCE_PASS: ${MONITOR_PASSWORD}
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      patroni3:
+        condition: service_started
+
+  # =====================================================
+  # HAPROXY: ACCESO DE ESCRITURA Y LECTURA
+  # =====================================================
+
+  haproxy:
+    image: haproxy:3.0-alpine
+    container_name: tpfinalgrupo14-haproxy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${HAPROXY_WRITE_PORT:-5435}:5435"
+      - "127.0.0.1:${HAPROXY_READ_PORT:-5436}:5436"
+      - "127.0.0.1:8404:8404"
+    volumes:
+      - ./Cluster-db/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      patroni1:
+        condition: service_started
+      patroni2:
+        condition: service_started
+      patroni3:
+        condition: service_started
+
+  # =====================================================
+  # PGADMIN
+  # =====================================================
+
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: tpfinalgrupo14-pgadmin
@@ -82,23 +267,24 @@ services:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
     ports:
-      - "5050:80"
+      - "${PGADMIN_PORT:-5050}:80"
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     networks:
       - tpfinalgrupo14-network
-    depends_on:
-      postgres:
-        condition: service_healthy
 
-  # Servicio automático de backups
+  # =====================================================
+  # BACKUP
+  # =====================================================
+
   backup:
     image: prodrigestivill/postgres-backup-local:16
     container_name: tpfinalgrupo14-backup
     restart: unless-stopped
     environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_DB: hia_grupo14
+      POSTGRES_HOST: haproxy
+      POSTGRES_PORT: 5435
+      POSTGRES_DB: ${POSTGRES_DB:-hia_grupo14}
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       SCHEDULE: "0 2 * * *"
@@ -110,21 +296,80 @@ services:
     networks:
       - tpfinalgrupo14-network
     depends_on:
-      postgres:
-        condition: service_healthy
+      haproxy:
+        condition: service_started
+
+  # =====================================================
+  # PROMETHEUS
+  # =====================================================
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: tpfinalgrupo14-prometheus
+    restart: unless-stopped
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./Cluster-db/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - tpfinalgrupo14-network
+
+  # =====================================================
+  # GRAFANA
+  # =====================================================
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: tpfinalgrupo14-grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      - prometheus
+
+# =====================================================
+# VOLUMENES
+# =====================================================
 
 volumes:
-  postgres_data:
+  patroni1_data:
     driver: local
-  postgres2_data:
+  patroni2_data:
     driver: local
-  postgres3_data:
+  patroni3_data:
     driver: local
+
+  etcd1_data:
+    driver: local
+  etcd2_data:
+    driver: local
+  etcd3_data:
+    driver: local
+
   pgadmin_data:
     driver: local
   backups_data:
     driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+# =====================================================
+# RED
+# =====================================================
 
 networks:
   tpfinalgrupo14-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
