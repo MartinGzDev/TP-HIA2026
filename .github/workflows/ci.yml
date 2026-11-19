@@ -1,15 +1,19 @@
 
-name: CI - TP HIA Grupo 14
+name: CI/CD - TP HIA Grupo 14
 
 on:
   push:
     branches:
       - main
       - feat/dockerizacion
+
   pull_request:
     branches:
       - main
       - feat/dockerizacion
+
+permissions:
+  contents: read
 
 jobs:
   backend:
@@ -83,3 +87,54 @@ jobs:
 
       - name: Construir imagen frontend
         run: docker build -t hia-grupo14-frontend ./frontend
+
+  publish:
+    name: CD - Publicar imágenes en GHCR
+    runs-on: ubuntu-latest
+    needs:
+      - backend
+      - frontend
+      - docker
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Iniciar sesión en GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Definir nombre de imágenes
+        id: image
+        run: |
+          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Publicar imagen backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ghcr.io/${{ steps.image.outputs.owner }}/hia-grupo14-backend:latest
+            ghcr.io/${{ steps.image.outputs.owner }}/hia-grupo14-backend:${{ github.sha }}
+
+      - name: Publicar imagen frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ghcr.io/${{ steps.image.outputs.owner }}/hia-grupo14-frontend:latest
+            ghcr.io/${{ steps.image.outputs.owner }}/hia-grupo14-frontend:${{ github.sha }}
