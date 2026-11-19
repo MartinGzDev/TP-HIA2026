@@ -335,6 +335,90 @@ services:
     depends_on:
       - prometheus
 
+  # =====================================================
+  # BACKEND
+  # =====================================================
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tpfinalgrupo14-backend
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: haproxy
+      DB_NAME: ${POSTGRES_DB:-hia_grupo14}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+    expose:
+      - "3000"
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      haproxy:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # =====================================================
+  # PRECARGA DE DATOS INICIALES
+  # =====================================================
+
+  seed:
+    image: tp-hia2026-backend
+    container_name: tpfinalgrupo14-seed
+    command: ["npm", "run", "seed"]
+    restart: "no"
+    profiles:
+      - seed
+    env_file:
+      - ./.env
+    environment:
+      NODE_ENV: production
+      DB_HOST: haproxy
+      DB_NAME: ${POSTGRES_DB:-hia_grupo14}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # =====================================================
+  # FRONTEND
+  # =====================================================
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tpfinalgrupo14-frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      API_URL: http://backend:3000
+    ports:
+      - "127.0.0.1:4200:4000"
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      backend:
+        condition: service_started
+
 # =====================================================
 # VOLUMENES
 # =====================================================
