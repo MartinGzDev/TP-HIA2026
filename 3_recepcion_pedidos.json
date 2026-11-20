@@ -1,0 +1,199 @@
+{
+  "name": "HIA14 - 3 Recepcion de pedidos con validacion",
+  "nodes": [
+    {
+      "id": "5f6475ae-cbf3-46a4-8777-6f43114b827c",
+      "name": "Webhook pedido externo",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pedido-externo",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "475a4f89-1127-4e36-99eb-0bac424a196b"
+    },
+    {
+      "id": "e70a970d-907f-4b9d-8a05-697de2fefd9f",
+      "name": "Validar datos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || {};\nconst errores = [];\nif (!b.clienteId || !Number.isInteger(Number(b.clienteId)) || Number(b.clienteId) <= 0) errores.push('clienteId debe ser un entero positivo');\nif (!b.direccionEntrega || String(b.direccionEntrega).trim().length < 5) errores.push('direccionEntrega es obligatoria (minimo 5 caracteres)');\nconst pagos = ['Tarjeta de Crédito','Tarjeta de Débito','Efectivo','Transferencia','Mercado Pago','Otro'];\nif (!pagos.includes(b.metodoPago)) errores.push('metodoPago invalido');\nconst total = Number(b.total);\nif (!Number.isFinite(total) || total <= 0) errores.push('total debe ser un numero mayor a 0');\nreturn [{ json: { valido: errores.length === 0, errores,\n  clienteId: Number(b.clienteId), direccionEntrega: String(b.direccionEntrega || '').trim(),\n  metodoPago: b.metodoPago, total } }];"
+      }
+    },
+    {
+      "id": "0d03a966-6e4b-4ecb-8b2a-c031f8e65fb5",
+      "name": "¿Datos validos?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "0d1b68b1-c94a-469f-a530-408fcf322b48",
+              "leftValue": "={{ $json.valido }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "58064054-51d2-4dcd-a040-75c5ad15de57",
+      "name": "Guardar (BD, escritura)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        720,
+        -80
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=CREATE TABLE IF NOT EXISTS n8n_pedidos_externos (id SERIAL PRIMARY KEY, cliente_id INT NOT NULL, direccion_entrega TEXT NOT NULL, metodo_pago TEXT NOT NULL, total NUMERIC(12,2) NOT NULL, recibido_en TIMESTAMPTZ NOT NULL DEFAULT now()); INSERT INTO n8n_pedidos_externos (cliente_id, direccion_entrega, metodo_pago, total) VALUES ({{ $json.clienteId }}, '{{ $json.direccionEntrega.replace(/'/g, \"''\") }}', '{{ $json.metodoPago }}', {{ $json.total }}) RETURNING id;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres HIA14 escritura"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "f5ce5b76-e24a-4049-9d4b-7cf1550ccf6c",
+      "name": "Responder 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        -80
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, mensaje: 'Pedido recibido', id: $json.id } }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "d91f1b98-d438-45ff-b240-fc77b11f253a",
+      "name": "Responder 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        100
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, errores: $json.errores } }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "5adff9d2-3287-4639-8b67-1311584c9bf2",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -220
+      ],
+      "parameters": {
+        "content": "Flujo 3: recibe un pedido por POST, valida y guarda en la tabla n8n_pedidos_externos (la crea sola) por el puerto de ESCRITURA de HAProxy (5435). Datos malos -> 400.",
+        "height": 160,
+        "width": 360
+      }
+    }
+  ],
+  "connections": {
+    "Webhook pedido externo": {
+      "main": [
+        [
+          {
+            "node": "Validar datos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar datos": {
+      "main": [
+        [
+          {
+            "node": "¿Datos validos?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Datos validos?": {
+      "main": [
+        [
+          {
+            "node": "Guardar (BD, escritura)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar (BD, escritura)": {
+      "main": [
+        [
+          {
+            "node": "Responder 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

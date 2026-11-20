@@ -1,0 +1,30 @@
+# ============================================================
+# FRAGMENTO PARA docker-compose.yml  (NO esta aplicado en el repo)
+# 1) Pegar el servicio "n8n" dentro de "services:" (por ejemplo debajo de grafana)
+# 2) Pegar "n8n_data" dentro de "volumes:"
+# ============================================================
+
+  # ---------- dentro de services: ----------
+  n8n:
+    image: n8nio/n8n:1.76.1        # verificar/fijar una version que funcione; evitar :latest
+    container_name: tpfinalgrupo14-n8n
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
+    environment:
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      GENERIC_TIMEZONE: America/Argentina/Buenos_Aires
+      TZ: America/Argentina/Buenos_Aires
+      N8N_SECURE_COOKIE: "false"   # "true" si acceden por HTTPS (tunel)
+      WEBHOOK_URL: http://localhost:${N8N_PORT:-5678}/
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # ---------- dentro de volumes: ----------
+  n8n_data:
+    driver: local

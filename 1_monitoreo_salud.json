@@ -1,0 +1,181 @@
+{
+  "name": "HIA14 - 1 Monitoreo de salud del backend",
+  "nodes": [
+    {
+      "id": "4beb1352-d073-4a27-b58a-b81480468bf1",
+      "name": "Cada 1 minuto",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "959af513-3f56-41c4-bedd-d449aa9aa3f1",
+      "name": "GET /api/health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "url": "http://backend:3000/api/health",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "598eb4da-c847-4a69-aa18-93f03ea9eef5",
+      "name": "¿Falló?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "207234ec-61b2-4ad5-84a4-b514e11f6703",
+              "leftValue": "={{ $json.statusCode === 200 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "eff91262-541c-4baf-a93f-abed8060b2a4",
+      "name": "Alerta por mail",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        720,
+        -80
+      ],
+      "parameters": {
+        "fromEmail": "alertas@grupo14.com",
+        "toEmail": "TU_CORREO@ejemplo.com",
+        "subject": "ALERTA HIA14: el backend no responde",
+        "emailFormat": "text",
+        "text": "El chequeo de /api/health fallo.\nHora: {{ $now.toFormat('dd/LL/yyyy HH:mm:ss') }}\nCodigo recibido: {{ $json.statusCode ?? 'sin respuesta' }}\nDetalle: {{ $json.error?.message ?? '' }}",
+        "options": {}
+      },
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "SMTP HIA14"
+        }
+      }
+    },
+    {
+      "id": "ef8d4be4-009b-4d93-bffc-aa5f9131ea9c",
+      "name": "Todo OK (no hace nada)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        720,
+        100
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "d30a8eef-797e-42f3-b166-3dcb646183ca",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -220
+      ],
+      "parameters": {
+        "content": "Flujo 1: monitoreo. Cada minuto consulta el backend. Si no da 200 (o no responde), manda mail. Para probar: docker compose stop backend.",
+        "height": 160,
+        "width": 360
+      }
+    }
+  ],
+  "connections": {
+    "Cada 1 minuto": {
+      "main": [
+        [
+          {
+            "node": "GET /api/health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET /api/health": {
+      "main": [
+        [
+          {
+            "node": "¿Falló?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Falló?": {
+      "main": [
+        [
+          {
+            "node": "Alerta por mail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Todo OK (no hace nada)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

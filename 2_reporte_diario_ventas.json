@@ -1,0 +1,141 @@
+{
+  "name": "HIA14 - 2 Reporte diario de ventas",
+  "nodes": [
+    {
+      "id": "f30e9f77-9173-48b4-9c58-4aaa13a6cecd",
+      "name": "Todos los dias 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "24df6577-5043-41ed-a44f-640960de8ae0",
+      "name": "Ventas de ayer (BD, solo lectura)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*)::int AS cantidad_pedidos, COALESCE(SUM(total),0)::numeric(14,2) AS total_ventas FROM pedidos WHERE \"fechaPedido\" >= date_trunc('day', now() - interval '1 day') AND \"fechaPedido\" < date_trunc('day', now()) AND estado <> 'cancelado';",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres HIA14 lectura"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "0d83aa42-5f77-43ee-8f59-7a1d08823551",
+      "name": "Armar resumen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst ayer = new Date(Date.now() - 24*60*60*1000).toLocaleDateString('es-AR');\nconst cantidad = Number(r.cantidad_pedidos || 0);\nconst total = Number(r.total_ventas || 0);\nconst promedio = cantidad ? total / cantidad : 0;\nreturn [{ json: { fecha: ayer, cantidad, total: total.toFixed(2), promedio: promedio.toFixed(2) } }];"
+      }
+    },
+    {
+      "id": "aa620db2-a636-4ec4-866b-1c4a2ea155a9",
+      "name": "Enviar reporte",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "fromEmail": "alertas@grupo14.com",
+        "toEmail": "TU_CORREO@ejemplo.com",
+        "subject": "Reporte diario de ventas - {{ $json.fecha }}",
+        "emailFormat": "text",
+        "text": "Resumen del dia {{ $json.fecha }}\nPedidos (sin cancelados): {{ $json.cantidad }}\nTotal vendido: $ {{ $json.total }}\nTicket promedio: $ {{ $json.promedio }}",
+        "options": {}
+      },
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "SMTP HIA14"
+        }
+      }
+    },
+    {
+      "id": "acd04b44-4cad-4355-97b1-6268453ca915",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -220
+      ],
+      "parameters": {
+        "content": "Flujo 2: reporte diario. Lee la tabla pedidos por el puerto de LECTURA de HAProxy (5436). Para la demo: boton Execute workflow.",
+        "height": 160,
+        "width": 360
+      }
+    }
+  ],
+  "connections": {
+    "Todos los dias 08:00": {
+      "main": [
+        [
+          {
+            "node": "Ventas de ayer (BD, solo lectura)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ventas de ayer (BD, solo lectura)": {
+      "main": [
+        [
+          {
+            "node": "Armar resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar resumen": {
+      "main": [
+        [
+          {
+            "node": "Enviar reporte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

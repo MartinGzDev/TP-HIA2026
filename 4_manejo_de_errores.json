@@ -1,0 +1,73 @@
+{
+  "name": "HIA14 - Manejo de errores",
+  "nodes": [
+    {
+      "id": "29f702c7-bd9e-43c3-83e6-529ea5eda236",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "5a3a3211-2b46-454d-8ef0-b26b6f1725ba",
+      "name": "Mail de error",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "fromEmail": "alertas@grupo14.com",
+        "toEmail": "TU_CORREO@ejemplo.com",
+        "subject": "ERROR en n8n: {{ $json.workflow.name }}",
+        "emailFormat": "text",
+        "text": "Fallo el flujo: {{ $json.workflow.name }}\nNodo: {{ $json.execution.lastNodeExecuted }}\nMensaje: {{ $json.execution.error.message }}\nEjecucion: {{ $json.execution.url }}",
+        "options": {}
+      },
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "SMTP HIA14"
+        }
+      }
+    },
+    {
+      "id": "e9ebbbc4-f95d-42c8-8a30-55f6d1df8cfd",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -220
+      ],
+      "parameters": {
+        "content": "Flujo de errores. En cada flujo: Settings > Error Workflow > este.",
+        "height": 160,
+        "width": 360
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Mail de error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
