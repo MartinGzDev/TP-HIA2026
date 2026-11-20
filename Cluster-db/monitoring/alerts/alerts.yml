@@ -1,0 +1,38 @@
+groups:
+  - name: infraestructura
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Servicio sin disponibilidad"
+          description: "El target {{ $labels.job }} está caído."
+
+      - alert: HighCPUUsage
+        expr: 100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 85
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Uso elevado de CPU"
+          description: "El uso de CPU supera el 85%."
+
+      - alert: HighMemoryUsage
+        expr: 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 90
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Uso elevado de memoria"
+          description: "El uso de memoria supera el 90%."
+
+      - alert: HighDiskUsage
+        expr: 100 * (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) > 85
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disco con poco espacio disponible"
+          description: "El uso de disco supera el 85%."
