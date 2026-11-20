@@ -487,6 +487,67 @@ services:
         condition: service_started
 
 # =====================================================
+  # =====================================================
+  # N8N - AUTOMATIZACION
+  # =====================================================
+
+  n8n:
+    image: n8nio/n8n:2.0.0
+    container_name: tpfinalgrupo14-n8n
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_SECURE_COOKIE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      GENERIC_TIMEZONE: America/Argentina/Buenos_Aires
+      TZ: America/Argentina/Buenos_Aires
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - backups_data:/backups:ro
+    networks:
+      - tpfinalgrupo14-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5678/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  # =====================================================
+  # VERIFICADOR DE BACKUPS - SOLO LECTURA
+  # =====================================================
+
+  backup-checker:
+    image: node:22-alpine
+    container_name: tpfinalgrupo14-backup-checker
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    command: ["node", "/app/server.js"]
+    volumes:
+      - ./tools/backup-checker/server.js:/app/server.js:ro
+      - backups_data:/backups:ro
+    expose:
+      - "8080"
+    networks:
+      - tpfinalgrupo14-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 # VOLUMENES
 # =====================================================
 
@@ -515,6 +576,9 @@ volumes:
     driver: local
 
 # =====================================================
+  n8n_data:
+    driver: local
+
 # RED
 # =====================================================
 
