@@ -260,7 +260,7 @@ services:
   # =====================================================
 
   pgadmin:
-    image: dpage/pgadmin4:latest
+    image: dpage/pgadmin4:9.19.0
     container_name: tpfinalgrupo14-pgadmin
     restart: unless-stopped
     environment:
@@ -281,6 +281,8 @@ services:
     image: prodrigestivill/postgres-backup-local:16
     container_name: tpfinalgrupo14-backup
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_HOST: haproxy
       POSTGRES_PORT: 5435
@@ -298,18 +300,43 @@ services:
     depends_on:
       haproxy:
         condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f \"http://localhost:$$HEALTHCHECK_PORT/\" || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # =====================================================
+  # DOCKER SOCKET PROXY
+  # =====================================================
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:3.4
+    container_name: tpfinalgrupo14-docker-socket-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      POST: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    expose:
+      - "2375"
+    networks:
+      - tpfinalgrupo14-network
 
   # =====================================================
   # DOCKER EXPORTER
   # =====================================================
 
   docker-exporter:
-    image: ghcr.io/davidborzek/docker-exporter:latest
+    image: ghcr.io/davidborzek/docker-exporter:0.7.0
     container_name: tpfinalgrupo14-docker-exporter
     restart: unless-stopped
-    user: root
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+    depends_on:
+      - docker-socket-proxy
     expose:
       - "8080"
     networks:
@@ -320,7 +347,7 @@ services:
   # =====================================================
   
   node-exporter:
-    image: prom/node-exporter:latest
+    image: prom/node-exporter:v1.13.1
     container_name: tpfinalgrupo14-node-exporter
     restart: unless-stopped
     command:
