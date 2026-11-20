@@ -1,0 +1,37 @@
+# Plantilla de configuración de MantisBT
+# El instalador (/admin/install.php) genera config_inc.php con valores reales;
+# ese archivo NO se sube al repositorio.
+
+$g_hostname               = 'mantis-db';
+$g_db_type                = 'mysqli';
+$g_database_name          = 'bugtracker';
+$g_db_username            = 'mantisbt';
+$g_db_password            = 'CAMBIAR_POR_MANTIS_DB_PASSWORD';
+
+$g_default_timezone       = 'America/Argentina/Buenos_Aires';
+$g_crypto_master_salt     = 'CAMBIAR_POR_UN_SALT_ALEATORIO';
+$g_path                   = 'http://localhost:8989/';
+
+$g_enable_email_notification = ON;
+$g_phpMailer_method       = PHPMAILER_METHOD_SMTP;
+
+# OPCIÓN 1 (por defecto): pruebas locales con Mailpit.
+# Los correos se ven en http://localhost:8025 y no salen a internet.
+$g_smtp_host              = 'mantis-mail';
+$g_smtp_port              = 1025;
+$g_from_email             = 'mesa.ayuda@grupo14.local';
+$g_return_path_email      = 'mesa.ayuda@grupo14.local';
+$g_administrator_email    = 'mesa.ayuda@grupo14.local';
+
+# OPCIÓN 2: Gmail real (descomentar y comentar la opción 1).
+# Requiere una contraseña de aplicación de Google (no la clave de la cuenta).
+# $g_smtp_host            = 'smtp.gmail.com';
+# $g_smtp_port            = 587;
+# $g_smtp_connection_mode = 'tls';
+# $g_smtp_username        = 'TU_CORREO@gmail.com';
+# $g_smtp_password        = 'TU_CONTRASENA_DE_APLICACION';
+# $g_from_email           = 'TU_CORREO@gmail.com';
+# $g_from_name            = 'Mesa de ayuda Grupo 14';
+# $g_return_path_email    = 'TU_CORREO@gmail.com';
+# $g_administrator_email  = 'TU_CORREO@gmail.com';
+EOF

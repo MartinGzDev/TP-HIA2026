@@ -486,3 +486,27 @@ Para demostrar el funcionamiento de la infraestructura se pueden registrar las s
 10. Verificación de los datos replicados después de la recuperación.
 
 Estas pruebas permiten demostrar la comunicación entre los componentes, la persistencia de datos y la tolerancia a fallos de la infraestructura.
+
+
+## 19. INSTALACION DE MANTISBT
+
+1) Agregar al .env (ver .env.example): MANTIS_DB_ROOT_PASSWORD, MANTIS_DB_PASSWORD y MANTIS_ENABLE_ADMIN=1.
+2) Crear las carpetas y levantar los servicios (desde la raíz del repositorio):
+
+```bash
+mkdir -p mantis/config mantis/custom
+docker compose up -d mantis-db mantis-mail mantis
+```
+3) Abrir http://localhost:8989 y completar el instalador con los siguientes datos:
+  Type of Database: MySQL / MariaDB
+  Hostname: mantis-db
+  Username (para conexión normal): mantisbt
+  Password (para conexión normal): el valor que pusiste en MANTIS_DB_PASSWORD
+  Database name: bugtracker
+  Admin Username (para crear las tablas): root
+  Admin Password: el valor que pusiste en MANTIS_DB_ROOT_PASSWORD
+  Zona horaria: America/Argentina/Buenos_Aires
+  URL: http://localhost:8989/
+4) Iniciar sesión con administrator / root y cambiar la contraseña de inmediato.
+5) Agregar al final de mantis/config/config_inc.php (generado por el instalador) las líneas de correo de mantis/config/config_inc.php.example.
+6) Cerrar el instalador: poner MANTIS_ENABLE_ADMIN=0 en el .env y ejecutar docker compose up -d mantis.
