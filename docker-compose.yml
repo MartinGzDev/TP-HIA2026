@@ -232,7 +232,7 @@ services:
         condition: service_started
 
   # =====================================================
-  # HAPROXY: ACCESO DE ESCRITURA Y LECTURA
+  # HAPROXY
   # =====================================================
 
   haproxy:
@@ -300,6 +300,43 @@ services:
         condition: service_started
 
   # =====================================================
+  # DOCKER EXPORTER
+  # =====================================================
+
+  docker-exporter:
+    image: ghcr.io/davidborzek/docker-exporter:latest
+    container_name: tpfinalgrupo14-docker-exporter
+    restart: unless-stopped
+    user: root
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    expose:
+      - "8080"
+    networks:
+      - tpfinalgrupo14-network
+
+  # =====================================================
+  # NODE EXPORTER - MÉTRICAS DEL SISTEMA OPERATIVO
+  # =====================================================
+  
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: tpfinalgrupo14-node-exporter
+    restart: unless-stopped
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    expose:
+      - "9100"
+    networks:
+      - tpfinalgrupo14-network
+
+  # =====================================================
   # PROMETHEUS
   # =====================================================
 
@@ -312,8 +349,11 @@ services:
     volumes:
       - ./Cluster-db/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
+      - ./Cluster-db/monitoring/alerts:/etc/prometheus/alerts:ro
     networks:
       - tpfinalgrupo14-network
+    depends_on:
+      - docker-exporter
 
   # =====================================================
   # GRAFANA
