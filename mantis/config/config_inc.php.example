@@ -1,0 +1,22 @@
+# Plantilla de configuración de MantisBT
+# El instalador (/admin/install.php) genera config_inc.php con valores reales;
+# ese archivo NO se sube al repositorio. Usar esta plantilla como referencia.
+
+$g_hostname               = 'mantis-db';
+$g_db_type                = 'mysqli';
+$g_database_name          = 'bugtracker';
+$g_db_username            = 'mantisbt';
+$g_db_password            = 'CAMBIAR_POR_MANTIS_DB_PASSWORD';
+
+$g_default_timezone       = 'America/Argentina/Buenos_Aires';
+$g_crypto_master_salt     = 'CAMBIAR_POR_UN_SALT_ALEATORIO';
+$g_path                   = 'http://localhost:8989/';
+
+# Correo de pruebas con Mailpit (bandeja en http://localhost:8025)
+$g_phpMailer_method       = PHPMAILER_METHOD_SMTP;
+$g_smtp_host              = 'mantis-mail';
+$g_smtp_port              = 1025;
+$g_from_email             = 'mesa.ayuda@grupo14.local';
+$g_return_path_email      = 'mesa.ayuda@grupo14.local';
+$g_administrator_email    = 'mesa.ayuda@grupo14.local';
+EOF

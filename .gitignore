@@ -191,3 +191,8 @@ volumes/
 *.session
 *.session.*
 sessions/
+
+# ============================================
+# Archivos de sesión y autenticación
+# ============================================
+mantis/config/config_inc.php

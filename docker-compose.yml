@@ -419,6 +419,51 @@ services:
       backend:
         condition: service_started
 
+  # =====================================================
+  # MANTIS BUG TRACKER (gestión de incidencias)
+  # =====================================================
+
+  mantis-db:
+    image: mariadb:11.4
+    container_name: tpfinalgrupo14-mantis-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MANTIS_DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: bugtracker
+      MYSQL_USER: mantisbt
+      MYSQL_PASSWORD: ${MANTIS_DB_PASSWORD}
+    volumes:
+      - mantis_db_data:/var/lib/mysql
+    networks:
+      - tpfinalgrupo14-network
+
+  mantis-mail:
+    image: axllent/mailpit
+    container_name: tpfinalgrupo14-mantis-mail
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
+    networks:
+      - tpfinalgrupo14-network
+
+  mantis:
+    image: xlrl/mantisbt:2.28.1
+    container_name: tpfinalgrupo14-mantis
+    restart: unless-stopped
+    environment:
+      MANTIS_TIMEZONE: America/Argentina/Buenos_Aires
+      MANTIS_ENABLE_ADMIN: ${MANTIS_ENABLE_ADMIN:-0}
+    ports:
+      - "127.0.0.1:8989:80"
+    volumes:
+      - ./mantis/config:/var/www/html/config
+      - ./mantis/custom:/var/www/html/custom
+    depends_on:
+      - mantis-db
+      - mantis-mail
+    networks:
+      - tpfinalgrupo14-network
+
 # =====================================================
 # VOLUMENES
 # =====================================================
@@ -446,7 +491,9 @@ volumes:
     driver: local
   grafana_data:
     driver: local
-
+  mantis_db_data:
+    driver: local
+    
 # =====================================================
 # RED
 # =====================================================
@@ -457,3 +504,6 @@ networks:
     ipam:
       config:
         - subnet: 172.30.0.0/16
+
+
+          
