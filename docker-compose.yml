@@ -260,7 +260,7 @@ services:
   # =====================================================
 
   pgadmin:
-    image: dpage/pgadmin4:latest
+    image: dpage/pgadmin4:9.19.0
     container_name: tpfinalgrupo14-pgadmin
     restart: unless-stopped
     environment:
@@ -281,6 +281,8 @@ services:
     image: prodrigestivill/postgres-backup-local:16
     container_name: tpfinalgrupo14-backup
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_HOST: haproxy
       POSTGRES_PORT: 5435
@@ -298,18 +300,43 @@ services:
     depends_on:
       haproxy:
         condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f \"http://localhost:$$HEALTHCHECK_PORT/\" || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # =====================================================
+  # DOCKER SOCKET PROXY
+  # =====================================================
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:3.4
+    container_name: tpfinalgrupo14-docker-socket-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      POST: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    expose:
+      - "2375"
+    networks:
+      - tpfinalgrupo14-network
 
   # =====================================================
   # DOCKER EXPORTER
   # =====================================================
 
   docker-exporter:
-    image: ghcr.io/davidborzek/docker-exporter:latest
+    image: ghcr.io/davidborzek/docker-exporter:0.7.0
     container_name: tpfinalgrupo14-docker-exporter
     restart: unless-stopped
-    user: root
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+    depends_on:
+      - docker-socket-proxy
     expose:
       - "8080"
     networks:
@@ -320,7 +347,7 @@ services:
   # =====================================================
   
   node-exporter:
-    image: prom/node-exporter:latest
+    image: prom/node-exporter:v1.13.1
     container_name: tpfinalgrupo14-node-exporter
     restart: unless-stopped
     command:
@@ -460,6 +487,105 @@ services:
         condition: service_started
 
 # =====================================================
+  # =====================================================
+  # N8N - AUTOMATIZACION
+  # =====================================================
+
+  n8n:
+    image: n8nio/n8n:2.0.0
+    container_name: tpfinalgrupo14-n8n
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_SECURE_COOKIE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      GENERIC_TIMEZONE: America/Argentina/Buenos_Aires
+      TZ: America/Argentina/Buenos_Aires
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - backups_data:/backups:ro
+    networks:
+      - tpfinalgrupo14-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5678/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  # =====================================================
+  # VERIFICADOR DE BACKUPS - SOLO LECTURA
+  # =====================================================
+
+  backup-checker:
+    image: node:22-alpine
+    container_name: tpfinalgrupo14-backup-checker
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    command: ["node", "/app/server.js"]
+    volumes:
+      - ./tools/backup-checker/server.js:/app/server.js:ro
+      - backups_data:/backups:ro
+    expose:
+      - "8080"
+    networks:
+      - tpfinalgrupo14-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # =====================================================
+  # MANTIS BUG TRACKER
+  # =====================================================
+
+  mantis-db:
+    image: mariadb:11.4
+    container_name: tpfinalgrupo14-mantis-db
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MANTIS_DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${MANTIS_DB_NAME}
+      MARIADB_USER: ${MANTIS_DB_USER}
+      MARIADB_PASSWORD: ${MANTIS_DB_PASSWORD}
+    volumes:
+      - mantis_db_data:/var/lib/mysql
+    networks:
+      - tpfinalgrupo14-network
+
+
+  mantisbt:
+    image: xlrl/mantisbt:latest
+    container_name: tpfinalgrupo14-mantis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8989:80"
+    environment:
+      MANTIS_TIMEZONE: America/Argentina/Buenos_Aires
+      MANTIS_ENABLE_ADMIN: "1"
+      MANTIS_SMTP_USERNAME: ${MANTIS_SMTP_USERNAME}
+      MANTIS_SMTP_PASSWORD: ${MANTIS_SMTP_PASSWORD}
+    volumes:
+      - ./config/mantis/config_inc.php:/var/www/html/config/config_inc.php:ro
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      - mantis-db
+
+
 # VOLUMENES
 # =====================================================
 
@@ -486,8 +612,13 @@ volumes:
     driver: local
   grafana_data:
     driver: local
+  mantis_db_data:
+    driver: local
 
 # =====================================================
+  n8n_data:
+    driver: local
+
 # RED
 # =====================================================
 

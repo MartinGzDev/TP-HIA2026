@@ -36,3 +36,11 @@ groups:
         annotations:
           summary: "Disco con poco espacio disponible"
           description: "El uso de disco supera el 85%."
+      - alert: PostgreSQLDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL no disponible"
+          description: "La instancia {{ $labels.job }} no responde."

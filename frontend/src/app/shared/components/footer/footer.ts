@@ -14,10 +14,9 @@ export class Footer {
   
   // Integrantes del proyecto
   integrantes = [
-    'FLORES, Jonatan Uziel',
-    'MORALES, Jeremias Leonel',
-    'MORALES, Malena',
-    'GUTIERREZ, Sergio Leonardo',
-    'VELAZQUEZ, Gonzalo Nicolas'
+    'Quiroga, Cesar',
+    'Gutierrez, Martin',
+    'Gregorio, Gaston',
+    'Patagua, Romina',
   ];
 }
