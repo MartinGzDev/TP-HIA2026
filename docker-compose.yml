@@ -548,6 +548,44 @@ services:
       timeout: 5s
       retries: 3
 
+  # =====================================================
+  # MANTIS BUG TRACKER
+  # =====================================================
+
+  mantis-db:
+    image: mariadb:11.4
+    container_name: tpfinalgrupo14-mantis-db
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MANTIS_DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${MANTIS_DB_NAME}
+      MARIADB_USER: ${MANTIS_DB_USER}
+      MARIADB_PASSWORD: ${MANTIS_DB_PASSWORD}
+    volumes:
+      - mantis_db_data:/var/lib/mysql
+    networks:
+      - tpfinalgrupo14-network
+
+
+  mantisbt:
+    image: xlrl/mantisbt:latest
+    container_name: tpfinalgrupo14-mantis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8989:80"
+    environment:
+      MANTIS_TIMEZONE: America/Argentina/Buenos_Aires
+      MANTIS_ENABLE_ADMIN: "1"
+      MANTIS_SMTP_USERNAME: ${MANTIS_SMTP_USERNAME}
+      MANTIS_SMTP_PASSWORD: ${MANTIS_SMTP_PASSWORD}
+    volumes:
+      - ./config/mantis/config_inc.php:/var/www/html/config/config_inc.php:ro
+    networks:
+      - tpfinalgrupo14-network
+    depends_on:
+      - mantis-db
+
+
 # VOLUMENES
 # =====================================================
 
@@ -573,6 +611,8 @@ volumes:
   prometheus_data:
     driver: local
   grafana_data:
+    driver: local
+  mantis_db_data:
     driver: local
 
 # =====================================================
