@@ -138,3 +138,22 @@ jobs:
           tags: |
             ghcr.io/${{ steps.image.outputs.owner }}/hia-grupo14-frontend:latest
             ghcr.io/${{ steps.image.outputs.owner }}/hia-grupo14-frontend:${{ github.sha }}
+
+    deploy-frontend:
+    name: CD - Desplegar frontend en Mac Mini
+    runs-on: [self-hosted, macOS, ARM64]
+    needs: publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Actualizar código
+        run: |
+          cd /Users/dev/documents/hia2026/tp-hia2026
+          git fetch origin main
+          git checkout main
+          git pull --ff-only origin main
+
+      - name: Reconstruir frontend
+        run: |
+          cd /Users/dev/documents/hia2026/tp-hia2026
+          docker compose up -d --build --no-deps frontend

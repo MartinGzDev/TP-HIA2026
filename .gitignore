@@ -191,3 +191,4 @@ volumes/
 *.session
 *.session.*
 sessions/
+actions-runner/
