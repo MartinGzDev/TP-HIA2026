@@ -139,7 +139,7 @@ jobs:
             ghcr.io/${{ steps.image.outputs.owner }}/hia-grupo14-frontend:latest
             ghcr.io/${{ steps.image.outputs.owner }}/hia-grupo14-frontend:${{ github.sha }}
 
-    deploy-frontend:
+  deploy-frontend:
     name: CD - Desplegar frontend en Mac Mini
     runs-on: [self-hosted, macOS, ARM64]
     needs: publish
